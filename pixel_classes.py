@@ -148,11 +148,7 @@ class PixelMap:
     scorer: Score = field(default_factory=Score)
     crs: int = 4326
 
-    def __post_init__(self):
-        # make sure both GDFs are projected into the same crs
-        self.voting_map = self.voting_map.to_crs(self.crs)
-        self.population_map = self.population_map.to_crs(self.crs)
-
+    def create_squares(self) -> gpd.GeoDataFrame:
         # find the area covered by at least one map
         pop_bounds = self.population_map.bounds
         pop_min = pop_bounds.min(axis=0)
@@ -194,7 +190,15 @@ class PixelMap:
                 squares.append(square)
 
         # create squares on a map
-        pixel_map = gpd.GeoDataFrame(geometry=squares, crs=self.crs)
+        return gpd.GeoDataFrame(geometry=squares, crs=self.crs)
+
+    def __post_init__(self):
+        # make sure both GDFs are projected into the same crs
+        self.voting_map = self.voting_map.to_crs(self.crs)
+        self.population_map = self.population_map.to_crs(self.crs)
+
+        # create squares
+        pixel_map = self.create_squares()
         pixel_map.insert(0, 'square_num', range(len(pixel_map)))
         # calculate weighted average of square intersection
         population_map = weighted_intersection(pixel_map, self.population_map, 'population')
@@ -203,6 +207,7 @@ class PixelMap:
         # merge the new squares with the original GeoDataFrames
         pixel_map = population_map.merge(red_map, how='left')
         pixel_map = pixel_map.merge(blue_map, how='left')
+        # clean up the resulting DataFrame
         pixel_map.set_geometry('geometry')
         pixel_map = pixel_map.dropna().reset_index()
         pixel_map.drop(columns=['index', 'square_num'], inplace=True)
@@ -212,7 +217,8 @@ class PixelMap:
         pixel_map['neighbors'] = None
         for idx, square in pixel_map.iterrows():
             # get 'not disjoint' pixels
-            neighbors = pixel_map[~pixel_map.geometry.disjoint(square.geometry)].square_num.tolist()
+            mask = ~pixel_map.geometry.disjoint(square.geometry)
+            neighbors = pixel_map.loc[mask, 'square_num'].tolist()
             # remove own name of the square from the list
             neighbors = [num for num in neighbors if square.square_num != num]
             # add names of neighbors as NEIGHBORS value
@@ -289,12 +295,25 @@ def main():
     nc_pop = gpd.read_file('./nc_data/population.geojson')
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
+
+    # with open('pix.pickle', 'wb') as fp:
+    #     pickle.dump(nc_pixel_map, fp)
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
     nc_pixel_map.initialize_districts()
+    scorer = Score()
+    scorer.weights[0] = 1e-4
+    scorer.weights[0] = 1e-2
+    scorer.weights[0] = 1
 
-    with open('pix.pickle', 'wb') as fp:
-        pickle.dump(nc_pixel_map, fp)
+    import cProfile
+    import pstats
 
+    with cProfile.Profile() as pr:
+        scorer.start_score(nc_pixel_map.pixel_map, 13)
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.dump_stats(filename='profile.prof')
     # while conditions aren't met
     # pick a pixel
     # find one its neighbors to switch with
@@ -304,5 +323,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    test()
+    main()
+    # test()
