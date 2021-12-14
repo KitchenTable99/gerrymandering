@@ -257,8 +257,8 @@ class PixelMap:
                     visited.append(neighbor)
                     queue.append(neighbor)
 
-            if all(n_class == focus_class for n_class in neighbor_classes):
-                borders[focus] = 0
+            if any(n_class != focus_class for n_class in neighbor_classes):
+                borders[focus] = 1
 
         self.borders = borders
 
