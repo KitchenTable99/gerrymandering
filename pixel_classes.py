@@ -1,16 +1,25 @@
 # the code for the Pixel and PixelMap classes
 import sys
-
+import random
 import pickle
 import numpy as np
 from math import ceil
 import geopandas as gpd
-from typing import List, Dict
-import matplotlib.pyplot as plt
 import shapely as shapely
+import matplotlib.animation
+import matplotlib.pyplot as plt
 from scipy.spatial import distance
 from shapely.geometry import Polygon
 from dataclasses import dataclass, field
+from matplotlib.animation import FuncAnimation
+from typing import List, Dict, Tuple, Optional, Generator, Set
+
+
+def random_numpy_iterator(arr) -> Generator[int, None, None]:
+    """This function will yield a random choice from an array until the array is empty."""
+    np.random.shuffle(arr)
+    for counter in range(len(arr) - 1):
+        yield int(arr[counter])
 
 
 def shapely_to_array(points: List[shapely.geometry.Point]) -> np.ndarray:
@@ -71,7 +80,6 @@ def weighted_intersection(gdf1: gpd.GeoDataFrame, gdf2: gpd.GeoDataFrame, attr_s
 
 @dataclass
 class Score:
-
     value: float = 0.
 
     weights: np.ndarray = field(default_factory=lambda: np.zeros(shape=3))
@@ -265,9 +273,59 @@ class PixelMap:
         # score the starting map
         self.starting_score()
 
-    def starting_score(self):
-        # population
-        pass
+    def not_diagonal_neighbor(self, first: int, second: int) -> bool:
+        first_center = self.pixel_map.at[first, 'geometry'].centroid
+        second_center = self.pixel_map.at[second, 'geometry'].centroid
+
+        return first_center.x == second_center.x or first_center.y == second_center.y
+
+    def pick_swap_pair(self) -> Tuple[int, int]:
+        """This function picks the pixel to switch.
+
+           :returns the indices of the first and second pixels to switch
+        """
+        # randomly select the first pixel
+        border_pixels = np.argwhere(self.borders == 1)
+        random_borders = random_numpy_iterator(border_pixels)
+        while True:
+            # get a border pixel that we haven't tried yet
+            first_pixel = next(random_borders)
+
+            # find a neighbor with a different class
+            first_class = self.pixel_map.at[first_pixel, 'class']
+            neighbors = self.pixel_map.at[first_pixel, 'neighbors']
+            random.shuffle(neighbors)
+
+            for neighbor in neighbors:
+                second_class = self.pixel_map.at[neighbor, 'class']
+                if second_class != first_class and self.not_diagonal_neighbor(first_pixel, neighbor):
+                    second_pixel = neighbor
+                    break
+            else:
+                continue
+            return first_pixel, second_pixel
+
+    def swap_pixels(self, first: int, second: int) -> None:
+        # swap classes
+        self.pixel_map.at[first, 'class'] = self.pixel_map.at[second, 'class']
+        # check both pixels and neighbors for border state
+        update_borders = {first}
+        for neighbor in self.pixel_map.at[first, 'neighbors']:
+            update_borders.add(neighbor)
+
+        for pixel in update_borders:
+            focus_neighbors = self.pixel_map.at[pixel, 'neighbors']
+            f_neighbor_class = [self.pixel_map.at[f_neighbor, 'class'] for f_neighbor in focus_neighbors]
+            pixel_class = self.pixel_map.at[pixel, 'class']
+            if any(n_class != pixel_class for n_class in f_neighbor_class):
+                self.borders[pixel] = 1
+            else:
+                self.borders[pixel] = 0
+        # update metrics
+
+    def show_districts(self):
+        self.pixel_map.plot(column='class', cmap='plasma')
+        plt.show()
 
     def plot_column(self, column: str, cmap: str = 'viridis') -> None:
         """This function will plot some column. Useful for visualizing lots of stuff.
@@ -283,11 +341,7 @@ def test():
     with open('pix.pickle', 'rb') as fp:
         pixel_map: PixelMap = pickle.load(fp)
 
-    scorer = Score()
-    scorer.weights[0] = 1e-4
-    scorer.weights[0] = 1e-2
-    scorer.weights[0] = 1
-    print(scorer.start_score(pixel_map.pixel_map, 13))
+    # pixel_map.show_districts()
 
 
 def main():
@@ -296,10 +350,11 @@ def main():
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
-    # with open('pix.pickle', 'wb') as fp:
-    #     pickle.dump(nc_pixel_map, fp)
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
     nc_pixel_map.initialize_districts()
+    # with open('pix.pickle', 'wb') as fp:
+    #     pickle.dump(nc_pixel_map, fp)
+
     scorer = Score()
     scorer.weights[0] = 1e-4
     scorer.weights[0] = 1e-2
@@ -323,5 +378,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # test()
+    # main()
+    test()
