@@ -226,10 +226,48 @@ class PixelMap:
         self.voting_map = self.voting_map.to_crs(self.crs)
         self.population_map = self.population_map.to_crs(self.crs)
 
-        # create squares
-        pixel_map = self.create_squares()
-        # extract neighbors and insert throwaway indexing column
-        neighbors_df = pixel_map.pop('neighbors')
+        # find the area covered by at least one map
+        pop_bounds = self.population_map.bounds
+        pop_min = pop_bounds.min(axis=0)
+        pop_max = pop_bounds.max(axis=0)
+        vote_bounds = self.voting_map.bounds
+        vote_min = vote_bounds.min(axis=0)
+        vote_max = vote_bounds.max(axis=0)
+
+        x_min = min(pop_min[0], vote_min[0])
+        y_min = min(pop_min[1], vote_min[1])
+        x_max = max(pop_max[2], vote_max[2])
+        y_max = max(pop_max[3], vote_max[3])
+
+        # determine size of squares
+        x_len = x_max - x_min
+        y_len = y_max - y_min
+        max_len = max(x_len, y_len)
+        square_len = (max_len * self.resolution) / 100
+
+        # figure out how many squares are needed in each dimension
+        num_x_squares = ceil(x_len / square_len)
+        num_y_squares = ceil(y_len / square_len)
+
+        # create the squares to cover the map
+        squares = []
+        for i in range(num_y_squares):
+            for j in range(num_x_squares):
+                x_start = j * square_len + x_min
+                x_end = (j + 1) * square_len + x_min
+                y_start = i * square_len + y_min
+                y_end = (i + 1) * square_len + y_min
+
+                square = Polygon([
+                    (x_start, y_start),
+                    (x_end, y_start),
+                    (x_end, y_end),
+                    (x_start, y_end)
+                ])
+                squares.append(square)
+
+        # create squares on a map
+        pixel_map = gpd.GeoDataFrame(geometry=squares, crs=self.crs)
         pixel_map.insert(0, 'square_num', range(len(pixel_map)))
         # calculate weighted average of square intersection
         population_map = weighted_intersection(pixel_map, self.population_map, 'population')
@@ -241,33 +279,27 @@ class PixelMap:
         # clean up the resulting DataFrame
         pixel_map.set_geometry('geometry')
         pixel_map = pixel_map.dropna().reset_index()
-        pixel_map.drop(columns=['index', 'square_num'], inplace=True)
-        pixel_map.insert(0, 'square_num', range(len(pixel_map)))
+        pixel_map.drop(columns=['index'], inplace=True)
 
         # add the neighbors column
-        pixel_map = pixel_map.join(neighbors_df, how='left')
-        """
-        pixel_map['neighbors'] = None
-        for idx, square in pixel_map.iterrows():
-            # get 'not disjoint' pixels
-            mask = ~pixel_map.geometry.disjoint(square.geometry)
-            neighbors = pixel_map.loc[mask, ['square_num', 'geometry']].values.tolist()
-            # get neighbors in cardinal directions
-            square_centroid = square.geometry.centroid
-            square_x = square_centroid.x
-            square_y = square_centroid.y
-            cardinal_neighbors = []
-            # the centroids must share EXACTLY one coordinate
-            for neighbor in neighbors:
-                n_centroid = neighbor[1].centroid
-                if (
-                    n_centroid.x == square_x and n_centroid.y != square_y
-                    or n_centroid.x != square_x and n_centroid.y == square_y
-                ):
-                    cardinal_neighbors.append(neighbor[0])
-            # add names of neighbors as NEIGHBORS value
-            pixel_map.at[idx, 'neighbors'] = cardinal_neighbors
-        """
+        kept_squares = set(pixel_map['square_num'].unique())
+
+        def neighbor_list(row: pd.Series) -> List[int]:
+            neighbors = []
+            for move in (
+                    1,
+                    -1,
+                    num_x_squares,
+                    -1 * num_x_squares
+            ):
+                target_idx = row.square_num + move
+                if target_idx < 0 or target_idx > (num_x_squares * num_y_squares) or target_idx not in kept_squares:
+                    continue
+                neighbors.append(target_idx)
+
+            return neighbors
+
+        pixel_map['neighbors'] = pixel_map.apply(lambda row: neighbor_list(row), axis=1)
         self.map = pixel_map
 
     def initialize_districts(self) -> None:
@@ -306,11 +338,16 @@ class PixelMap:
 
         self.borders = borders
 
-    def not_diagonal_neighbor(self, first: int, second: int) -> bool:
-        first_center = self.map.at[first, 'geometry'].centroid
-        second_center = self.map.at[second, 'geometry'].centroid
+    def no_district_breaks(self, first: int, second: int) -> bool:
+        check_neighbors = [neighbor for neighbor in self.map.at[first, 'neighbors'] if neighbor != second]
+        for neighbor in check_neighbors:
+            possible_saviors = [neighbor_neighbor for neighbor_neighbor in self.map.at[neighbor, 'neighbors']
+                                if neighbor_neighbor != first]
+            savior_classes = [self.map.at[savior, 'class'] for savior in possible_saviors]
+            if self.map.at[neighbor, 'class'] not in savior_classes:
+                return False
 
-        return first_center.x == second_center.x or first_center.y == second_center.y
+        return True
 
     def pick_swap_pair(self) -> Tuple[int, int]:
         """This function picks the pixel to switch.
@@ -331,7 +368,7 @@ class PixelMap:
 
             for neighbor in neighbors:
                 second_class = self.map.at[neighbor, 'class']
-                if second_class != first_class and self.not_diagonal_neighbor(first_pixel, neighbor):
+                if second_class != first_class and self.no_district_breaks(first_pixel, neighbor):
                     second_pixel = neighbor
                     break
             else:
@@ -389,9 +426,9 @@ def main():
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
+    nc_pixel_map.initialize_districts()
     with open('pix.pickle', 'wb') as fp:
         pickle.dump(nc_pixel_map, fp)
-    nc_pixel_map.initialize_districts()
     sys.exit()
 
     scorer = Score()
