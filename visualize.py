@@ -10,7 +10,6 @@ from pixel_classes import *
 
 @dataclass
 class PixelMapAnimator:
-
     map: PixelMap
     fig: plt.Figure
     ax: plt.Axes
@@ -33,11 +32,10 @@ def time():
     animator = PixelMapAnimator(pixel_map, fig, ax)
     import timeit
 
-    print(timeit.timeit(lambda: animator(1), number=1000))
+    print(timeit.timeit(lambda: animator(1), number=100))
 
 
 def main():
-
     with open('pix.pickle', 'rb') as fp:
         pixel_map: PixelMap = pickle.load(fp)
 
