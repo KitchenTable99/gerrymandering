@@ -151,7 +151,7 @@ class PixelMap:
     resolution: float
     # TODO: good description of what resolution means
     num_districts: int
-    pixel_map: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
+    map: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
     borders: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
     scorer: Score = field(default_factory=Score)
     crs: int = 4326
@@ -232,11 +232,11 @@ class PixelMap:
             # add names of neighbors as NEIGHBORS value
             pixel_map.at[idx, 'neighbors'] = neighbors
 
-        self.pixel_map = pixel_map
+        self.map = pixel_map
 
     def initialize_districts(self) -> None:
         # convert points into an array to use in cdist
-        points = [self.pixel_map.at[idx, 'geometry'].centroid for idx in range(len(self.pixel_map))]
+        points = [self.map.at[idx, 'geometry'].centroid for idx in range(len(self.map))]
         point_array = shapely_to_array(points)
 
         # randomly select self.num_districts unique Pixels in the map
@@ -247,20 +247,20 @@ class PixelMap:
         distances = distance.cdist(point_array, centroids)
         assignments = np.argmin(distances, axis=1)
         # assign each pixel to the appropriate class
-        self.pixel_map['class'] = assignments
+        self.map['class'] = assignments
 
         # if there is at least one neighbor of a different class, mark as border in separate array
-        borders = np.zeros(len(self.pixel_map))
+        borders = np.zeros(len(self.map))
         visited = [0]
         queue = [0]
         while queue:
             focus = queue.pop()
-            neighbors = self.pixel_map.at[focus, 'neighbors']
-            focus_class = self.pixel_map.at[focus, 'class']
+            neighbors = self.map.at[focus, 'neighbors']
+            focus_class = self.map.at[focus, 'class']
 
             neighbor_classes = []
             for neighbor in neighbors:
-                neighbor_classes.append(self.pixel_map.at[neighbor, 'class'])
+                neighbor_classes.append(self.map.at[neighbor, 'class'])
                 if neighbor not in visited:
                     visited.append(neighbor)
                     queue.append(neighbor)
@@ -270,12 +270,9 @@ class PixelMap:
 
         self.borders = borders
 
-        # score the starting map
-        self.starting_score()
-
     def not_diagonal_neighbor(self, first: int, second: int) -> bool:
-        first_center = self.pixel_map.at[first, 'geometry'].centroid
-        second_center = self.pixel_map.at[second, 'geometry'].centroid
+        first_center = self.map.at[first, 'geometry'].centroid
+        second_center = self.map.at[second, 'geometry'].centroid
 
         return first_center.x == second_center.x or first_center.y == second_center.y
 
@@ -292,12 +289,12 @@ class PixelMap:
             first_pixel = next(random_borders)
 
             # find a neighbor with a different class
-            first_class = self.pixel_map.at[first_pixel, 'class']
-            neighbors = self.pixel_map.at[first_pixel, 'neighbors']
+            first_class = self.map.at[first_pixel, 'class']
+            neighbors = self.map.at[first_pixel, 'neighbors']
             random.shuffle(neighbors)
 
             for neighbor in neighbors:
-                second_class = self.pixel_map.at[neighbor, 'class']
+                second_class = self.map.at[neighbor, 'class']
                 if second_class != first_class and self.not_diagonal_neighbor(first_pixel, neighbor):
                     second_pixel = neighbor
                     break
@@ -307,16 +304,16 @@ class PixelMap:
 
     def swap_pixels(self, first: int, second: int) -> None:
         # swap classes
-        self.pixel_map.at[first, 'class'] = self.pixel_map.at[second, 'class']
+        self.map.at[first, 'class'] = self.map.at[second, 'class']
         # check both pixels and neighbors for border state
         update_borders = {first}
-        for neighbor in self.pixel_map.at[first, 'neighbors']:
+        for neighbor in self.map.at[first, 'neighbors']:
             update_borders.add(neighbor)
 
         for pixel in update_borders:
-            focus_neighbors = self.pixel_map.at[pixel, 'neighbors']
-            f_neighbor_class = [self.pixel_map.at[f_neighbor, 'class'] for f_neighbor in focus_neighbors]
-            pixel_class = self.pixel_map.at[pixel, 'class']
+            focus_neighbors = self.map.at[pixel, 'neighbors']
+            f_neighbor_class = [self.map.at[f_neighbor, 'class'] for f_neighbor in focus_neighbors]
+            pixel_class = self.map.at[pixel, 'class']
             if any(n_class != pixel_class for n_class in f_neighbor_class):
                 self.borders[pixel] = 1
             else:
@@ -324,7 +321,7 @@ class PixelMap:
         # update metrics
 
     def show_districts(self):
-        self.pixel_map.plot(column='class', cmap='plasma')
+        self.map.plot(column='class', cmap='plasma')
         plt.show()
 
     def plot_column(self, column: str, cmap: str = 'viridis') -> None:
@@ -333,7 +330,7 @@ class PixelMap:
         :param column: the column to map the color to.
         :param cmap: the colormap to use
         """
-        self.pixel_map.plot(column=column, cmap=cmap)
+        self.map.plot(column=column, cmap=cmap)
         plt.show()
 
 
@@ -352,8 +349,10 @@ def main():
 
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
     nc_pixel_map.initialize_districts()
-    # with open('pix.pickle', 'wb') as fp:
-    #     pickle.dump(nc_pixel_map, fp)
+    with open('pix.pickle', 'wb') as fp:
+        pickle.dump(nc_pixel_map, fp)
+
+    sys.exit()
 
     scorer = Score()
     scorer.weights[0] = 1e-4
@@ -364,7 +363,7 @@ def main():
     import pstats
 
     with cProfile.Profile() as pr:
-        scorer.start_score(nc_pixel_map.pixel_map, 13)
+        scorer.start_score(nc_pixel_map.map, 13)
 
     stats = pstats.Stats(pr)
     stats.sort_stats(pstats.SortKey.TIME)
@@ -378,5 +377,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    test()
+    main()
+    # test()
