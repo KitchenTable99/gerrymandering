@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 from math import ceil
 import geopandas as gpd
+import pandas as pd
 import shapely as shapely
 import matplotlib.animation
 import matplotlib.pyplot as plt
@@ -198,7 +199,27 @@ class PixelMap:
                 squares.append(square)
 
         # create squares on a map
-        return gpd.GeoDataFrame(geometry=squares, crs=self.crs)
+        map = gpd.GeoDataFrame(geometry=squares, crs=self.crs)
+
+        # find the neighbors
+        def neighbor_list(row: pd.Series) -> List[int]:
+            neighbors = []
+            for move in (
+                1,
+                -1,
+                num_x_squares,
+                -1 * num_x_squares
+            ):
+                target_idx = row.name + move
+                if target_idx < 0 or target_idx > (num_x_squares * num_y_squares):
+                    continue
+                neighbors.append(target_idx)
+
+            return neighbors
+
+        map['neighbors'] = map.apply(lambda row: neighbor_list(row), axis=1)
+
+        return map
 
     def __post_init__(self):
         # make sure both GDFs are projected into the same crs
@@ -207,6 +228,8 @@ class PixelMap:
 
         # create squares
         pixel_map = self.create_squares()
+        # extract neighbors and insert throwaway indexing column
+        neighbors_df = pixel_map.pop('neighbors')
         pixel_map.insert(0, 'square_num', range(len(pixel_map)))
         # calculate weighted average of square intersection
         population_map = weighted_intersection(pixel_map, self.population_map, 'population')
@@ -221,17 +244,30 @@ class PixelMap:
         pixel_map.drop(columns=['index', 'square_num'], inplace=True)
         pixel_map.insert(0, 'square_num', range(len(pixel_map)))
 
-        # add the boundary column
+        # add the neighbors column
+        pixel_map = pixel_map.join(neighbors_df, how='left')
+        """
         pixel_map['neighbors'] = None
         for idx, square in pixel_map.iterrows():
             # get 'not disjoint' pixels
             mask = ~pixel_map.geometry.disjoint(square.geometry)
-            neighbors = pixel_map.loc[mask, 'square_num'].tolist()
-            # remove own name of the square from the list
-            neighbors = [num for num in neighbors if square.square_num != num]
+            neighbors = pixel_map.loc[mask, ['square_num', 'geometry']].values.tolist()
+            # get neighbors in cardinal directions
+            square_centroid = square.geometry.centroid
+            square_x = square_centroid.x
+            square_y = square_centroid.y
+            cardinal_neighbors = []
+            # the centroids must share EXACTLY one coordinate
+            for neighbor in neighbors:
+                n_centroid = neighbor[1].centroid
+                if (
+                    n_centroid.x == square_x and n_centroid.y != square_y
+                    or n_centroid.x != square_x and n_centroid.y == square_y
+                ):
+                    cardinal_neighbors.append(neighbor[0])
             # add names of neighbors as NEIGHBORS value
-            pixel_map.at[idx, 'neighbors'] = neighbors
-
+            pixel_map.at[idx, 'neighbors'] = cardinal_neighbors
+        """
         self.map = pixel_map
 
     def initialize_districts(self) -> None:
@@ -339,6 +375,11 @@ def test():
         pixel_map: PixelMap = pickle.load(fp)
 
     # pixel_map.show_districts()
+    weird_ones = [idx for idx, item in enumerate(pixel_map.map['neighbors']) if not item]
+    weird_map = pixel_map.map.iloc[weird_ones]
+
+    weird_map.boundary.plot()
+    plt.show()
 
 
 def main():
@@ -348,10 +389,9 @@ def main():
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
-    nc_pixel_map.initialize_districts()
     with open('pix.pickle', 'wb') as fp:
         pickle.dump(nc_pixel_map, fp)
-
+    nc_pixel_map.initialize_districts()
     sys.exit()
 
     scorer = Score()
