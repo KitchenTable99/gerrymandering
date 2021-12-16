@@ -161,70 +161,6 @@ class PixelMap:
     scorer: Score = field(default_factory=Score)
     crs: int = 4326
 
-    def create_squares(self) -> gpd.GeoDataFrame:
-        # find the area covered by at least one map
-        pop_bounds = self.population_map.bounds
-        pop_min = pop_bounds.min(axis=0)
-        pop_max = pop_bounds.max(axis=0)
-        vote_bounds = self.voting_map.bounds
-        vote_min = vote_bounds.min(axis=0)
-        vote_max = vote_bounds.max(axis=0)
-
-        x_min = min(pop_min[0], vote_min[0])
-        y_min = min(pop_min[1], vote_min[1])
-        x_max = max(pop_max[2], vote_max[2])
-        y_max = max(pop_max[3], vote_max[3])
-
-        # determine size of squares
-        x_len = x_max - x_min
-        y_len = y_max - y_min
-        max_len = max(x_len, y_len)
-        square_len = (max_len * self.resolution) / 100
-
-        # figure out how many squares are needed in each dimension
-        num_x_squares = ceil(x_len / square_len)
-        num_y_squares = ceil(y_len / square_len)
-
-        # create the squares to cover the map
-        squares = []
-        for i in range(num_y_squares):
-            for j in range(num_x_squares):
-                x_start = j * square_len + x_min
-                x_end = (j + 1) * square_len + x_min
-                y_start = i * square_len + y_min
-                y_end = (i + 1) * square_len + y_min
-
-                square = Polygon([
-                    (x_start, y_start),
-                    (x_end, y_start),
-                    (x_end, y_end),
-                    (x_start, y_end)
-                ])
-                squares.append(square)
-
-        # create squares on a map
-        map = gpd.GeoDataFrame(geometry=squares, crs=self.crs)
-
-        # find the neighbors
-        def neighbor_list(row: pd.Series) -> List[int]:
-            neighbors = []
-            for move in (
-                1,
-                -1,
-                num_x_squares,
-                -1 * num_x_squares
-            ):
-                target_idx = row.name + move
-                if target_idx < 0 or target_idx > (num_x_squares * num_y_squares):
-                    continue
-                neighbors.append(target_idx)
-
-            return neighbors
-
-        map['neighbors'] = map.apply(lambda row: neighbor_list(row), axis=1)
-
-        return map
-
     def __post_init__(self):
         # make sure both GDFs are projected into the same crs
         self.voting_map = self.voting_map.to_crs(self.crs)
@@ -327,7 +263,7 @@ class PixelMap:
         visited = [self.map.index.values[0]]
         queue = [self.map.index.values[0]]
         while queue:
-            focus = queue.pop()
+            focus = queue.pop(0)
             neighbors = self.map.at[focus, 'neighbors']
             focus_class = self.map.at[focus, 'class']
 
@@ -345,11 +281,43 @@ class PixelMap:
 
     def no_district_breaks(self, first: int, second: int) -> bool:
         check_neighbors = [neighbor for neighbor in self.map.at[first, 'neighbors'] if neighbor != second]
+        # grab all the neighbors that might be broken
+        class_to_neighbor_dict = {}
         for neighbor in check_neighbors:
-            possible_saviors = [neighbor_neighbor for neighbor_neighbor in self.map.at[neighbor, 'neighbors']
-                                if neighbor_neighbor != first]
-            savior_classes = [self.map.at[savior, 'class'] for savior in possible_saviors]
-            if self.map.at[neighbor, 'class'] not in savior_classes:
+            neighbor_class = self.map.at[neighbor, 'class']
+            if neighbor_class not in class_to_neighbor_dict:
+                class_to_neighbor_dict[neighbor_class] = [neighbor]
+            else:
+                class_to_neighbor_dict.get(neighbor_class).append(neighbor)
+
+        # make sure all pairs can reach each other
+        for class_num, neighbor_list in class_to_neighbor_dict.items():
+            # only bother if there are at least two neighbors
+            # TODO: decide if a list of len(3) should be checked
+            if len(neighbor_list) < 2:
+                continue
+
+            start = neighbor_list.pop()
+            visited = [start]
+            queue = [start]
+            while queue:
+                focus = queue.pop(0)
+                if focus in neighbor_list:
+                    neighbor_list.remove(focus)
+                    if not neighbor_list:
+                        break
+
+                focus_neighbors = self.map.at[focus, 'neighbors']
+                for focus_neighbor in focus_neighbors:
+                    if (
+                        focus_neighbor not in visited and
+                        self.map.at[focus_neighbor, 'class'] == class_num and
+                        focus_neighbor != first
+                    ):
+                        visited.append(focus_neighbor)
+                        queue.append(focus_neighbor)
+
+            if neighbor_list:
                 return False
 
         return True
