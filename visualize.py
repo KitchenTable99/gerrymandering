@@ -35,16 +35,27 @@ def time():
     print(timeit.timeit(lambda: animator(1), number=100))
 
 
+def save():
+    with open('pix.pickle', 'rb') as fp:
+        pixel_map: PixelMap = pickle.load(fp)
+
+    fig, ax = plt.subplots(1)
+    animator = PixelMapAnimator(pixel_map, fig, ax)
+    anim = FuncAnimation(fig, animator, frames=180, interval=500)
+    anim.save('testing.gif', writer='imagemagick', fps=60)
+
+
 def main():
     with open('pix.pickle', 'rb') as fp:
         pixel_map: PixelMap = pickle.load(fp)
 
     fig, ax = plt.subplots(1)
     animator = PixelMapAnimator(pixel_map, fig, ax)
-    anim = FuncAnimation(fig, animator, frames=720, interval=1000)
-    anim.save('testing.gif', writer='imagemagick', fps=240)
+    anim = FuncAnimation(fig, animator, frames=180, interval=500)
+    plt.show()
 
 
 if __name__ == '__main__':
-    # main()
-    time()
+    # save()
+    main()
+    # time()
