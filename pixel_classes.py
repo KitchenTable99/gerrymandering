@@ -7,20 +7,24 @@ from math import ceil
 import geopandas as gpd
 import pandas as pd
 import shapely as shapely
-import matplotlib.animation
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
 from shapely.geometry import Polygon
 from dataclasses import dataclass, field
-from matplotlib.animation import FuncAnimation
 from typing import List, Dict, Tuple, Optional, Generator, Set
 
 
-def random_numpy_iterator(arr) -> Generator[int, None, None]:
+def border_generator(d) -> Generator[int, None, None]:
     """This function will yield a random choice from an array until the array is empty."""
-    np.random.shuffle(arr)
-    for counter in range(len(arr) - 1):
-        yield int(arr[counter])
+    # create frequency list
+    freq_list = []
+    for key, value in d.items():
+        for _ in range(value):
+            freq_list.append(key)
+
+    random.shuffle(freq_list)
+    for counter in range(len(freq_list) - 1):
+        yield freq_list[counter]
 
 
 def shapely_to_array(points: List[shapely.geometry.Point]) -> np.ndarray:
@@ -153,7 +157,7 @@ class PixelMap:
     # TODO: good description of what resolution means
     num_districts: int
     map: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
-    borders: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
+    borders: Dict[int, int] = field(default_factory=dict)
     scorer: Score = field(default_factory=Score)
     crs: int = 4326
 
@@ -300,11 +304,12 @@ class PixelMap:
             return neighbors
 
         pixel_map['neighbors'] = pixel_map.apply(lambda row: neighbor_list(row), axis=1)
+        pixel_map.set_index('square_num', inplace=True)
         self.map = pixel_map
 
     def initialize_districts(self) -> None:
         # convert points into an array to use in cdist
-        points = [self.map.at[idx, 'geometry'].centroid for idx in range(len(self.map))]
+        points = [poly.centroid for poly in self.map['geometry'].values]
         point_array = shapely_to_array(points)
 
         # randomly select self.num_districts unique Pixels in the map
@@ -318,9 +323,9 @@ class PixelMap:
         self.map['class'] = assignments
 
         # if there is at least one neighbor of a different class, mark as border in separate array
-        borders = np.zeros(len(self.map))
-        visited = [0]
-        queue = [0]
+        borders = {}
+        visited = [self.map.index.values[0]]
+        queue = [self.map.index.values[0]]
         while queue:
             focus = queue.pop()
             neighbors = self.map.at[focus, 'neighbors']
@@ -333,8 +338,8 @@ class PixelMap:
                     visited.append(neighbor)
                     queue.append(neighbor)
 
-            if any(n_class != focus_class for n_class in neighbor_classes):
-                borders[focus] = 1
+            different_classes = [n_class != focus_class for n_class in neighbor_classes]
+            borders[focus] = sum(different_classes)
 
         self.borders = borders
 
@@ -355,8 +360,7 @@ class PixelMap:
            :returns the indices of the first and second pixels to switch
         """
         # randomly select the first pixel
-        border_pixels = np.argwhere(self.borders == 1)
-        random_borders = random_numpy_iterator(border_pixels)
+        random_borders = border_generator(self.borders)
         while True:
             # get a border pixel that we haven't tried yet
             first_pixel = next(random_borders)
@@ -387,10 +391,8 @@ class PixelMap:
             focus_neighbors = self.map.at[pixel, 'neighbors']
             f_neighbor_class = [self.map.at[f_neighbor, 'class'] for f_neighbor in focus_neighbors]
             pixel_class = self.map.at[pixel, 'class']
-            if any(n_class != pixel_class for n_class in f_neighbor_class):
-                self.borders[pixel] = 1
-            else:
-                self.borders[pixel] = 0
+            different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
+            self.borders[pixel] = sum(different_classes)
         # update metrics
 
     def show_districts(self):
