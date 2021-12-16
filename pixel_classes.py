@@ -3,6 +3,7 @@ import sys
 import random
 import pickle
 import numpy as np
+from tqdm import tqdm as progress
 from math import ceil
 import geopandas as gpd
 import pandas as pd
@@ -14,15 +15,16 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Generator, Set
 
 
-def border_generator(d) -> Generator[int, None, None]:
+def border_generator(d, st_weight: int) -> Generator[int, None, None]:
     """This function will yield a random choice from an array until the array is empty."""
     # create frequency list
     freq_list = []
     for key, value in d.items():
-        for _ in range(value):
+        exp_value = value ** st_weight
+        for _ in range(exp_value):
             freq_list.append(key)
 
-    random.shuffle(freq_list)
+    np.random.shuffle(freq_list)
     for counter in range(len(freq_list) - 1):
         yield freq_list[counter]
 
@@ -328,7 +330,7 @@ class PixelMap:
            :returns the indices of the first and second pixels to switch
         """
         # randomly select the first pixel
-        random_borders = border_generator(self.borders)
+        random_borders = border_generator(self.borders, 3)
         while True:
             # get a border pixel that we haven't tried yet
             first_pixel = next(random_borders)
@@ -341,6 +343,7 @@ class PixelMap:
             for neighbor in neighbors:
                 second_class = self.map.at[neighbor, 'class']
                 if second_class != first_class and self.no_district_breaks(first_pixel, neighbor):
+                    # TODO: make sure that it doesn't eliminate a district
                     second_pixel = neighbor
                     break
             else:
@@ -364,7 +367,7 @@ class PixelMap:
         # update metrics
 
     def show_districts(self):
-        self.map.plot(column='class', cmap='plasma')
+        self.map.plot(column='class')
         plt.show()
 
     def plot_column(self, column: str, cmap: str = 'viridis') -> None:
@@ -381,12 +384,19 @@ def test():
     with open('pix.pickle', 'rb') as fp:
         pixel_map: PixelMap = pickle.load(fp)
 
-    # pixel_map.show_districts()
-    weird_ones = [idx for idx, item in enumerate(pixel_map.map['neighbors']) if not item]
-    weird_map = pixel_map.map.iloc[weird_ones]
+    import cProfile
+    import pstats
 
-    weird_map.boundary.plot()
-    plt.show()
+    with cProfile.Profile() as pr:
+        for _ in progress(range(10_000)):
+            first, second = pixel_map.pick_swap_pair()
+            pixel_map.swap_pixels(first, second)
+
+    pixel_map.show_districts()
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    # stats.dump_stats(filename='profile.prof')
 
 
 def main():
@@ -397,6 +407,8 @@ def main():
 
     nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
     nc_pixel_map.initialize_districts()
+    sys.exit()
+
     with open('pix.pickle', 'wb') as fp:
         pickle.dump(nc_pixel_map, fp)
     sys.exit()
@@ -424,5 +436,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # test()
+    # main()
+    test()
