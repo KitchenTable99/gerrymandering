@@ -15,6 +15,9 @@ class PixelMapAnimator:
     ax: plt.Axes
     frame_gap: int
 
+    def __post_init__(self):
+        self.ax.axis('off')
+
     def __call__(self, i: int) -> None:
         if i == 0:
             self.map.map.plot(ax=self.ax, column='class')
@@ -51,11 +54,11 @@ def save():
     with open('pix.pickle', 'rb') as fp:
         pixel_map: PixelMap = pickle.load(fp)
 
-    pixel_map.weights = np.array([10, 20, 0])
     fig, ax = plt.subplots(1)
-    animator = PixelMapAnimator(pixel_map, fig, ax, 10)
-    anim = FuncAnimation(fig, animator, frames=600, interval=500)
-    anim.save('testing.gif', writer='imagemagick', fps=60)
+    pixel_map.weights = np.array([10, 20, 0])
+    animator = PixelMapAnimator(pixel_map, fig, ax, 1000)
+    anim = FuncAnimation(fig, animator, frames=50, interval=500)
+    anim.save('testing.gif', writer='imagemagick', fps=10)
 
 
 def main():
@@ -63,12 +66,13 @@ def main():
         pixel_map: PixelMap = pickle.load(fp)
 
     fig, ax = plt.subplots(1)
+    pixel_map.weights = np.array([10, 20, 0])
     animator = PixelMapAnimator(pixel_map, fig, ax, 1000)
     anim = FuncAnimation(fig, animator, frames=100, interval=1000)
     plt.show()
 
 
 if __name__ == '__main__':
-    # save()
-    main()
+    save()
+    # main()
     # time()
