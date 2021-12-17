@@ -4,9 +4,11 @@ __pycache__/
 *$py.class
 
 *.DS_Store
+*.prof
 *.gif
 *.pickle
 .idea/
+img/
 .jovianrc
 
 # C extensions
