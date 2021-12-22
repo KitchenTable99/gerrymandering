@@ -1,18 +1,34 @@
 # the code for the Pixel and PixelMap classes
-import sys
-import random
 import pickle
-import numpy as np
-from tqdm import tqdm as progress
-from math import ceil
+import random
+from dataclasses import dataclass, field
+from math import ceil, dist
+from typing import List, Dict, Tuple, Generator, Optional
+
 import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import shapely as shapely
-import matplotlib.pyplot as plt
 from scipy.spatial import distance
 from shapely.geometry import Polygon
-from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Generator
+
+
+def pixel_to_center(row: pd.Series, districts: List['District'], change: str = 'none') -> float:
+    # find centers
+    pixel_centroid = row['geometry'].centroid
+    pixel_center = (pixel_centroid.x, pixel_centroid.y)
+    district = districts[row['district']]
+    district_center = district.get_center()
+
+    # calculate distance
+    d = dist(pixel_center, district_center)
+    if change == 'add':
+        district.add_deviation(d)
+    elif change == 'sub':
+        district.sub_deviation(d)
+
+    return d
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -94,6 +110,29 @@ def weighted_intersection(gdf1: gpd.GeoDataFrame, gdf2: gpd.GeoDataFrame, attr_s
 
 
 @dataclass
+class District:
+
+    population: float
+    population_center: np.ndarray
+    red_votes: float
+    blue_votes: float
+    deviation_from_center: float = 0.
+
+    @property
+    def election_result(self) -> float:
+        return self.red_votes / self.blue_votes
+
+    def get_center(self) -> np.ndarray:
+        return self.population_center
+
+    def add_deviation(self, dev: float) -> None:
+        self.deviation_from_center += dev
+
+    def sub_deviation(self, dev: float) -> None:
+        self.deviation_from_center -= dev
+
+
+@dataclass
 class PixelMap:
     # initialization stuff
     voting_map: gpd.GeoDataFrame
@@ -108,18 +147,13 @@ class PixelMap:
     borders: Dict[int, int] = field(default_factory=dict)
 
     # scoring stuff
+    districts: List[District] = field(default_factory=list)
     score: float = 0.
 
     surface_tension_weight: int = 3
     keep_bad_maps: float = 0.
     weights: np.ndarray = field(default_factory=lambda: np.zeros(shape=3))
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-
-    populations: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-    counts: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-    centers: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-    red_totals: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-    blue_totals: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
     def __post_init__(self):
         # make sure both GDFs are projected into the same crs
@@ -203,9 +237,8 @@ class PixelMap:
         pixel_map.set_index('square_num', inplace=True)
         self.map = pixel_map
 
-    def initialize_districts(self) -> None:
-        """This function will create the Vornoi tesselation to assign each pixel to a district.
-           This function also calculates the initial border dictionary."""
+    def tessellate(self) -> None:
+        """This function creates a Vornoi tesselation based on the internal pixel map."""
         # convert points into an array to use in cdist
         points = [poly.centroid for poly in self.map['geometry'].values]
         point_array = shapely_to_array(points)
@@ -218,20 +251,26 @@ class PixelMap:
         distances = distance.cdist(point_array, centroids)
         assignments = np.argmin(distances, axis=1)
         # assign each pixel to the appropriate class
-        self.map['class'] = assignments
+        self.map['district'] = assignments
 
-        # if there is at least one neighbor of a different class, mark as border in separate array
+    def initialize_districts(self) -> None:
+        """This function initializes the districts by tessellating the map, finding the borders,
+           creating district objects, and calculating starting properties of those districts."""
+        # assign each pixel to a district
+        self.tessellate()
+
+        # find the borders using a BFS
         borders = {}
         visited = [self.map.index.values[0]]
         queue = [self.map.index.values[0]]
         while queue:
             focus = queue.pop(0)
             neighbors = self.map.at[focus, 'neighbors']
-            focus_class = self.map.at[focus, 'class']
+            focus_class = self.map.at[focus, 'district']
 
             neighbor_classes = []
             for neighbor in neighbors:
-                neighbor_classes.append(self.map.at[neighbor, 'class'])
+                neighbor_classes.append(self.map.at[neighbor, 'district'])
                 if neighbor not in visited:
                     visited.append(neighbor)
                     queue.append(neighbor)
@@ -240,76 +279,52 @@ class PixelMap:
             borders[focus] = sum(different_classes)
 
         self.borders = borders
-        self.start_score()
 
-    def start_score(self) -> None:
-        """This function calculates the initial scoring variables. Necessary to build the starting scoring arrays."""
-        # create variables to fill
-        pops = np.zeros(self.num_districts)
-        counts = np.zeros(self.num_districts)
-        centers = np.zeros(shape=(self.num_districts, 2))
-        red_votes = np.zeros(self.num_districts)
-        blue_votes = np.zeros(self.num_districts)
-        points_by_district: Dict[int, np.ndarray] = {}
+        # create the border objects
+        self.create_district_objs()
 
+        # find the distance from each pixel to its population center
+        self.map['distance_from_center'] = self.map.apply(
+            lambda row: pixel_to_center(row, self.districts, 'add'), axis=1)
+
+        # score the map
+        self.score = self.evaluate()
+
+    def create_district_objs(self) -> None:
+        """This function creates the district objects that are used to calculate score."""
         # rotate over each district
+        district_objs = []
         for district in range(self.num_districts):
             # find simple sum metrics
-            gdf = self.map[self.map['class'] == district]
+            gdf = self.map[self.map['district'] == district]
             pop, red, blue = gdf[['population', 'red_votes', 'blue_votes']].sum()
-            pops[district] = pop
-            red_votes[district] = red
-            blue_votes[district] = blue
+
             # find population center
             shapely_points = gdf['geometry'].centroid
             points = shapely_to_array(shapely_points)
-            points_by_district[district] = points
-            counts[district] = len(points)
+            center = np.average(points, weights=gdf['population'].to_numpy(), axis=0)
 
-            centers[district] = np.average(points, weights=gdf['population'].to_numpy(), axis=0)
+            district_objs.append(District(pop, center, red, blue))
 
-        # store the pre-calculated metrics
-        self.populations = pops
-        self.counts = counts
-        self.centers = centers
-        self.red_totals = red_votes
-        self.blue_totals = blue_votes
+        self.districts = district_objs
 
-        # actually score the map
-        scoring = np.zeros(3)
-        # spread of population
-        pops -= np.mean(pops)
-        scoring[0] = np.sum(np.power(pops, 4))
-        # spread of population from center
-        pre_dist = [distance.cdist(points_by_district[i], centers[i].reshape((1, 2))) for i in
-                    range(self.num_districts)]
-        dist = [arr.flatten() for arr in pre_dist]
-        scoring[1] = np.mean([np.std(arr) for arr in dist])
-        # calculate deviation from election results
-        current_results = red_votes / (red_votes + blue_votes)
-        sorted_results = np.sort(current_results)
-        # TODO: actually fit the results to some curve
-        scoring[2] = np.std(sorted_results)
+    def evaluate(self, districts: Optional[List[District]] = None) -> float:
+        """This function scores a list of districts. It could be a set of actual districts or a hypothetical set when
+           switching pixels. If no list is passed, this method will evaluate the internal districts.
 
-        score = self.weights @ scoring.T
-        self.score = score
-
-    def evaluate(self, pop, center, red, blue) -> float:
-        """This function scores a map that doesn't actually exist. The scoring arrays are passed in and the evaluation
-           is returned
-
-           :param pop: The population scoring array containing populations of each district
-           :param center: The center scoring array containing centers of each district
-           :param red: The red votes scoring array containing the total number of red votes in each district
-           :param blue: The blue votes scoring array containing the total number of blue votes in each district
+           :param districts: A list of district objects to score
 
            :return the score represented by a float
         """
+        if not districts:
+            districts = self.districts
+
         # actually score the map
         scoring = np.zeros(3)
         # spread of population
-        pop -= np.mean(pop)
-        scoring[0] = np.sum(np.power(pop, 4))
+        pop_arr = np.array([district.population for district in districts])
+        pop_arr -= np.mean(pop_arr)
+        scoring[0] = np.sum(np.power(pop_arr, 4))
         # spread of population from center
         # TODO: actually implement the squareness metric
         '''
@@ -323,10 +338,8 @@ class PixelMap:
         '''
         scoring[1] = 1
         # calculate deviation from election results
-        current_results = red / (red + blue)
-        sorted_results = np.sort(current_results)
         # TODO: actually fit the results to some curve
-        scoring[2] = np.std(sorted_results)
+        scoring[2] = 1
 
         return self.weights @ scoring.T
 
@@ -342,7 +355,7 @@ class PixelMap:
         check_neighbors = [neighbor for neighbor in self.map.at[first, 'neighbors'] if neighbor != second]
         class_to_neighbor_dict = {}
         for neighbor in check_neighbors:
-            neighbor_class = self.map.at[neighbor, 'class']
+            neighbor_class = self.map.at[neighbor, 'district']
             if neighbor_class not in class_to_neighbor_dict:
                 class_to_neighbor_dict[neighbor_class] = [neighbor]
             else:
@@ -372,7 +385,7 @@ class PixelMap:
                     # origin node
                     if (
                             focus_neighbor not in visited and
-                            self.map.at[focus_neighbor, 'class'] == class_num and
+                            self.map.at[focus_neighbor, 'district'] == class_num and
                             focus_neighbor != first
                     ):
                         visited.append(focus_neighbor)
@@ -391,7 +404,7 @@ class PixelMap:
            :return whether or not the pixel is the last in the district
         """
         remove_pop = self.map.at[remove_pixel, 'population']
-        remove_class = self.map.at[remove_pixel, 'class']
+        remove_class = self.map.at[remove_pixel, 'district']
 
         return self.populations[remove_class] - remove_pop <= 0
 
@@ -407,12 +420,12 @@ class PixelMap:
             first_pixel = next(random_borders)
 
             # find a neighbor with a different class
-            first_class = self.map.at[first_pixel, 'class']
+            first_class = self.map.at[first_pixel, 'district']
             neighbors = self.map.at[first_pixel, 'neighbors']
             random.shuffle(neighbors)
 
             for neighbor in neighbors:
-                second_class = self.map.at[neighbor, 'class']
+                second_class = self.map.at[neighbor, 'district']
                 if second_class == first_class or \
                         self.eliminate_district(first_pixel) or \
                         self.district_breaks(first_pixel, neighbor):
@@ -432,66 +445,71 @@ class PixelMap:
 
            :returns whether or not a swap took place
         """
+        # o_district will represent the original district
+        # d_district will represent the destination district
         # swap classes
-        original_class = self.map.at[first, 'class']
-        destination_class = self.map.at[second, 'class']
-        self.map.at[first, 'class'] = destination_class
+        o_district = self.map.at[first, 'district']
+        d_district = self.map.at[second, 'district']
+        self.map.at[first, 'district'] = d_district
 
         # update metrics
         pop = self.map.at[first, 'population']
         red = self.map.at[first, 'red_votes']
         blue = self.map.at[first, 'blue_votes']
+
+        # create new districts
         # population
-        origin_new_pop = self.populations[original_class] - pop
-        destination_new_pop = self.populations[destination_class] + pop
+        origin_new_pop = self.populations[o_district] - pop
+        destination_new_pop = self.populations[d_district] + pop
         # centers
         # this is fairly easy to follow if you remove an arbitrary item from an average
         # back of the napkin math shows the formula
         # the relative unreadability is just because of how funky it is to type out math
-        c = self.populations[original_class]
-        n = self.counts[original_class]
+        # TODO: fix this formula to use weighted count (population)
+        c = self.populations[o_district]
+        n = self.counts[o_district]
         pixel_point = self.map.at[first, 'geometry'].centroid
         pixel_arr = np.array([pixel_point.x, pixel_point.y])
 
         origin_new_center = ((c*n) - pixel_arr) / (n - 1)
 
-        d = self.populations[destination_class]
-        n = self.counts[destination_class]
+        d = self.populations[d_district]
+        n = self.counts[d_district]
 
         destination_new_center = ((d*n) + pixel_arr) / (n + 1)
         # results
-        origin_new_red = self.red_totals[original_class] - red
-        origin_new_blue = self.blue_totals[original_class] - blue
-        destination_new_red = self.red_totals[destination_class] + red
-        destination_new_blue = self.red_totals[destination_class] + blue
+        origin_new_red = self.red_totals[o_district] - red
+        origin_new_blue = self.blue_totals[o_district] - blue
+        destination_new_red = self.red_totals[d_district] + red
+        destination_new_blue = self.red_totals[d_district] + blue
 
         # score itself
         # duplicate the arrays
         n_populations = self.populations.copy()
-        n_populations[original_class] = origin_new_pop
-        n_populations[destination_class] = destination_new_pop
+        n_populations[o_district] = origin_new_pop
+        n_populations[d_district] = destination_new_pop
 
         n_centers = self.centers.copy()
-        n_centers[original_class] = origin_new_center
-        n_centers[destination_class] = destination_new_center
+        n_centers[o_district] = origin_new_center
+        n_centers[d_district] = destination_new_center
 
         n_red = self.red_totals.copy()
-        n_red[original_class] = origin_new_red
-        n_red[destination_class] = destination_new_red
+        n_red[o_district] = origin_new_red
+        n_red[d_district] = destination_new_red
 
         n_blue = self.blue_totals.copy()
-        n_blue[original_class] = origin_new_blue
-        n_blue[destination_class] = destination_new_blue
+        n_blue[o_district] = origin_new_blue
+        n_blue[d_district] = destination_new_blue
 
         new_score = self.evaluate(n_populations, n_centers, n_red, n_blue)
 
         if new_score > self.score and random.random() < self.keep_bad_maps:
-            self.map.at[first, 'class'] = original_class
+            self.map.at[first, 'class'] = o_district
             return False
 
         # update the internal fields
-        self.counts[original_class] -= 1
-        self.counts[destination_class] += 1
+        self.counts[o_district] -= 1
+        self.counts[d_district] += 1
 
         self.populations = n_populations
         self.centers = n_centers
@@ -505,8 +523,8 @@ class PixelMap:
 
         for pixel in update_borders:
             focus_neighbors = self.map.at[pixel, 'neighbors']
-            f_neighbor_class = [self.map.at[f_neighbor, 'class'] for f_neighbor in focus_neighbors]
-            pixel_class = self.map.at[pixel, 'class']
+            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors]
+            pixel_class = self.map.at[pixel, 'district']
             different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
             self.borders[pixel] = sum(different_classes)
 
@@ -514,7 +532,7 @@ class PixelMap:
 
     def show_districts(self):
         """This function plots a choropleth of the internal GeoDataFrame with the district as the color var."""
-        self.map.plot(column='class')
+        self.map.plot(column='district')
         plt.show()
 
     def plot_column(self, column: str, cmap: str = 'viridis') -> None:
@@ -536,7 +554,7 @@ def test():
     pixel_map.initialize_districts()
 
     fig, ax = plt.subplots()
-    pixel_map.map.plot(column='class', ax=ax)
+    pixel_map.map.plot(column='district', ax=ax)
     ax.axis('off')
     plt.show()
 
