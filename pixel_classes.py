@@ -1,6 +1,7 @@
 # the code for the Pixel and PixelMap classes
 import pickle
 import random
+from copy import deepcopy
 from dataclasses import dataclass, field
 from math import ceil, dist
 from typing import List, Dict, Tuple, Generator, Optional
@@ -14,21 +15,22 @@ from scipy.spatial import distance
 from shapely.geometry import Polygon
 
 
-def pixel_to_center(row: pd.Series, districts: List['District'], change: str = 'none') -> float:
+def pixel_to_center(pixel_centroid: shapely.geometry.Point, district: 'District') -> float:
     # find centers
-    pixel_centroid = row['geometry'].centroid
     pixel_center = (pixel_centroid.x, pixel_centroid.y)
-    district = districts[row['district']]
     district_center = district.get_center()
 
     # calculate distance
-    d = dist(pixel_center, district_center)
-    if change == 'add':
-        district.add_deviation(d)
-    elif change == 'sub':
-        district.sub_deviation(d)
+    return dist(pixel_center, district_center)
 
-    return d
+
+def initialize_pixel_dist(row: pd.Series, districts: List['District']) -> None:
+    district = districts[row['district']]
+    pixel_centroid = row['geometry'].centroid
+
+    pix_dist = pixel_to_center(pixel_centroid, district)
+    district.add_pixel_deviation(row['square_num'], pix_dist)
+    district.add_pixel_centroid(row['square_num'], pixel_centroid)
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -65,50 +67,6 @@ def shapely_to_array(points: List[shapely.geometry.Point]) -> np.ndarray:
     return np.array([*point_tuples])
 
 
-def weighted_intersection(gdf1: gpd.GeoDataFrame, gdf2: gpd.GeoDataFrame, attr_str: str) -> gpd.GeoDataFrame:
-    """This function takes two GeoDataFrames with disjoint geometry and puts some target attribute from the second into
-        the first one. This function will overlay the two dataframes and if poly1 from gdf1 intersects poly2 from gdf2
-        and the area of the intersectional polygon is 50% of gdf2, 50% of the target attribute from gdf2 will be assigned
-        to poly1 in gdf1.
-
-        :param gdf1. The dataframe to gain the target attribute
-        :param gdf2. The dataframe from which to take the target attribute
-        :param attr_str. The attribute to take. Must be a column name in gdf2.
-
-        :returns the GeoDataFrame with the new attribute tacked on
-    """
-    # input checking
-    assert attr_str in gdf2.columns, 'attr_str must be in gdf2.columns'
-
-    # prepare GeoDataFrames
-    gdf1 = gdf1.to_crs(3857)
-    if 'square_num' not in gdf1.columns:
-        gdf1.insert(0, 'square_num', range(len(gdf1)))
-
-    gdf2 = gdf2.to_crs(3857)
-    gdf2.insert(0, 'gdf2_num', range(len(gdf2)))
-    if 'area' not in gdf2.columns:
-        gdf2['area'] = gdf2.area
-
-    # overlay the two data frames and calculate the proportionality of overlap
-    inter = gpd.overlay(gdf1, gdf2, how='intersection')
-    inter['inter_area'] = inter.area
-    inter['gdf2_area'] = inter.apply(lambda r: gdf2.at[r['gdf2_num'], 'area'], axis=1)
-    # this gets the area of the gdf2 polygon that the smaller inter polygon came from
-    inter['prop ' + attr_str] = (inter['inter_area'] / inter['gdf2_area']) * inter[attr_str]
-    inter = inter[['square_num', 'prop ' + attr_str]]
-
-    # group all the smaller inter polygons by square and put them back in the original GeoDataFrame via sum aggregation
-    groups = inter.groupby('square_num').sum()
-    gdf1['attr_str'] = np.nan
-    for row in groups.iterrows():
-        square, attr = row
-        attr = float(attr)
-        gdf1.at[square, 'attr_str'] = attr
-
-    return gdf1.rename(columns={'attr_str': attr_str})
-
-
 @dataclass
 class District:
 
@@ -116,126 +74,73 @@ class District:
     population_center: np.ndarray
     red_votes: float
     blue_votes: float
-    deviation_from_center: float = 0.
+
+    pixel_deviations: Dict[int,  float] = field(default_factory=dict)
+    pixel_centroids: Dict[int, shapely.geometry.Point] = field(default_factory=dict)
 
     @property
     def election_result(self) -> float:
         return self.red_votes / self.blue_votes
 
+    @property
+    def deviation(self) -> float:
+        return sum(self.pixel_deviations.values())
+
     def get_center(self) -> np.ndarray:
         return self.population_center
 
-    def add_deviation(self, dev: float) -> None:
-        self.deviation_from_center += dev
+    def add_pixel_deviation(self, pix_num: int, pix_dist: float) -> None:
+        """This function adds an entry into the internal pixel deviations dictionary. If an entry is already present,
+           nothing further happens.
 
-    def sub_deviation(self, dev: float) -> None:
-        self.deviation_from_center -= dev
+           :param pix_num: the number of the pixel. the GeoDataFrame refers to this as square_num
+           :param pix_dist: the distance the center of that pixel is from the center of the district
+        """
+        if self.pixel_deviations.get(pix_num):
+            return
+
+        self.pixel_deviations[pix_num] = pix_dist
+
+    def add_pixel_centroid(self, pix_num: int, pix_centroid: shapely.geometry.Point) -> None:
+        """This function adds an entry into the internal pixel deviations dictionary. If an entry is already present,
+           nothing further happens.
+
+           :param pix_num: the number of the pixel. the GeoDataFrame refers to this as square_num
+           :param pix_centroid: the centroid of the pixel to add
+        """
+        if self.pixel_centroids.get(pix_num):
+            return
+
+        self.pixel_centroids[pix_num] = pix_centroid
+
+    def add_pixel(self, pix_pop: float, pix_red: float, pix_blue: float, pix_num: int, pix_center: shapely.geometry.Point) -> None:
+        # update the basic sum quantities
+        self.population += pix_pop
+        self.red_votes += pix_red
+        self.blue_votes += pix_blue
+
+        # edit center
+        # TODO: actually edit the center
+
+        # update the old pixels with the new center
+        for pix, centroid in self.pixel_centroids.items():
+            new_dist = pixel_to_center(centroid, self)
+            self.pixel_deviations[pix] = new_dist
+        # add in the new pixel to the new center
 
 
 @dataclass
-class PixelMap:
-    # initialization stuff
-    voting_map: gpd.GeoDataFrame
-    population_map: gpd.GeoDataFrame
-    resolution: float
-    # TODO: good description of what resolution means
+class GerrymanderingSimulation:
+    map: gpd.GeoDataFrame
     num_districts: int
-    crs: int = 4326
-
-    # actual contents of map
-    map: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
     borders: Dict[int, int] = field(default_factory=dict)
-
-    # scoring stuff
     districts: List[District] = field(default_factory=list)
-    score: float = 0.
 
+    score: float = 0.
     surface_tension_weight: int = 3
     keep_bad_maps: float = 0.
     weights: np.ndarray = field(default_factory=lambda: np.zeros(shape=3))
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
-
-    def __post_init__(self):
-        # make sure both GDFs are projected into the same crs
-        self.voting_map = self.voting_map.to_crs(self.crs)
-        self.population_map = self.population_map.to_crs(self.crs)
-
-        # find the area covered by at least one map
-        pop_bounds = self.population_map.bounds
-        pop_min = pop_bounds.min(axis=0)
-        pop_max = pop_bounds.max(axis=0)
-        vote_bounds = self.voting_map.bounds
-        vote_min = vote_bounds.min(axis=0)
-        vote_max = vote_bounds.max(axis=0)
-
-        x_min = min(pop_min[0], vote_min[0])
-        y_min = min(pop_min[1], vote_min[1])
-        x_max = max(pop_max[2], vote_max[2])
-        y_max = max(pop_max[3], vote_max[3])
-
-        # determine size of squares
-        x_len = x_max - x_min
-        y_len = y_max - y_min
-        max_len = max(x_len, y_len)
-        square_len = (max_len * self.resolution) / 100
-
-        # figure out how many squares are needed in each dimension
-        num_x_squares = ceil(x_len / square_len)
-        num_y_squares = ceil(y_len / square_len)
-
-        # create the squares to cover the map
-        squares = []
-        for i in range(num_y_squares):
-            for j in range(num_x_squares):
-                x_start = j * square_len + x_min
-                x_end = (j + 1) * square_len + x_min
-                y_start = i * square_len + y_min
-                y_end = (i + 1) * square_len + y_min
-
-                square = Polygon([
-                    (x_start, y_start),
-                    (x_end, y_start),
-                    (x_end, y_end),
-                    (x_start, y_end)
-                ])
-                squares.append(square)
-
-        # create squares on a map
-        pixel_map = gpd.GeoDataFrame(geometry=squares, crs=self.crs)
-        pixel_map.insert(0, 'square_num', range(len(pixel_map)))
-        # calculate weighted average of square intersection
-        population_map = weighted_intersection(pixel_map, self.population_map, 'population')
-        red_map = weighted_intersection(pixel_map, self.voting_map, 'red_votes')
-        blue_map = weighted_intersection(pixel_map, self.voting_map, 'blue_votes')
-        # merge the new squares with the original GeoDataFrames
-        pixel_map = population_map.merge(red_map, how='left')
-        pixel_map = pixel_map.merge(blue_map, how='left')
-        # clean up the resulting DataFrame
-        pixel_map.set_geometry('geometry')
-        pixel_map = pixel_map.dropna().reset_index()
-        pixel_map.drop(columns=['index'], inplace=True)
-
-        # add the neighbors column
-        kept_squares = set(pixel_map['square_num'].unique())
-
-        def neighbor_list(row: pd.Series) -> List[int]:
-            neighbors = []
-            for move in (
-                    1,
-                    -1,
-                    num_x_squares,
-                    -1 * num_x_squares
-            ):
-                target_idx = row.square_num + move
-                if target_idx < 0 or target_idx > (num_x_squares * num_y_squares) or target_idx not in kept_squares:
-                    continue
-                neighbors.append(target_idx)
-
-            return neighbors
-
-        pixel_map['neighbors'] = pixel_map.apply(lambda row: neighbor_list(row), axis=1)
-        pixel_map.set_index('square_num', inplace=True)
-        self.map = pixel_map
 
     def tessellate(self) -> None:
         """This function creates a Vornoi tesselation based on the internal pixel map."""
@@ -284,8 +189,7 @@ class PixelMap:
         self.create_district_objs()
 
         # find the distance from each pixel to its population center
-        self.map['distance_from_center'] = self.map.apply(
-            lambda row: pixel_to_center(row, self.districts, 'add'), axis=1)
+        self.map.apply(lambda row: initialize_pixel_dist(row, self.districts), axis=1)
 
         # score the map
         self.score = self.evaluate()
@@ -316,32 +220,24 @@ class PixelMap:
 
            :return the score represented by a float
         """
+        # see if method should score the internal districts
         if not districts:
             districts = self.districts
 
-        # actually score the map
         scoring = np.zeros(3)
         # spread of population
         pop_arr = np.array([district.population for district in districts])
         pop_arr -= np.mean(pop_arr)
         scoring[0] = np.sum(np.power(pop_arr, 4))
-        # spread of population from center
-        # TODO: actually implement the squareness metric
-        '''
-        dist = [0 for _ in range(self.num_districts)]
-        for idx, row in self.map.iterrows():
 
-        pre_dist = [distance.cdist(points_by_district[i], centers[i].reshape((1, 2))) for i in
-                    range(self.num_districts)]
-        dist = [arr.flatten() for arr in pre_dist]
-        scoring[1] = np.mean([np.std(arr) for arr in dist])
-        '''
-        scoring[1] = 1
+        # spread of population from center
+        scoring[1] = sum(district.deviation for district in districts)
+
         # calculate deviation from election results
         # TODO: actually fit the results to some curve
         scoring[2] = 1
 
-        return self.weights @ scoring.T
+        return self.weights @ scoring.T  # TODO: check that this returns a float
 
     def district_breaks(self, first: int, second: int) -> bool:
         """This function determines if giving the first pixel the class of the second will break any district.
@@ -447,9 +343,14 @@ class PixelMap:
         """
         # o_district will represent the original district
         # d_district will represent the destination district
-        # swap classes
         o_district = self.map.at[first, 'district']
         d_district = self.map.at[second, 'district']
+
+        # keep a copy of the two districts that will change
+        old_o_district = deepcopy(self.districts[o_district])
+        old_d_district = deepcopy(self.districts[d_district])
+
+        # swap district
         self.map.at[first, 'district'] = d_district
 
         # update metrics
