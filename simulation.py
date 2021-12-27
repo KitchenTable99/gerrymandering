@@ -259,10 +259,14 @@ class GerrymanderingSimulation:
         s_district_copy.add_pixel(first_data)
 
         # recalculate deviations
-        f_district_copy.reset_deviation()
-        s_district_copy.reset_deviation()
-        self.map.loc[self.map['district'].isin((f_class, s_class))].apply(
-            lambda row: self.districts[row['district']].add_deviation(row['np_geometry']), axis=1)
+        for district in self.districts:
+            district.reset_deviation()
+        # f_district_copy.reset_deviation()
+        # s_district_copy.reset_deviation()
+        # these three lines basically perform a pd.apply but vectorized for performance
+        # changed_centers = self.map.loc[self.map['district'].isin((f_class, s_class))]
+        v = np.vectorize(lambda d, g: self.districts[d].add_deviation(g))
+        v(self.map.district, self.map.np_geometry)
 
         # re-score the map
         to_score = deepcopy(self.districts)
