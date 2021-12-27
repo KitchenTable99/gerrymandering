@@ -6,7 +6,7 @@ from typing import Union
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Point
+from shapely.geometry import Polygon
 
 from utilities import shapely_to_array
 
@@ -24,8 +24,9 @@ class District:
     def election_result(self) -> float:
         return self.red_votes / self.blue_votes
 
-    def add_deviation(self, geom: Point) -> None:
-        point_tuple = (geom.x, geom.y)
+    def add_deviation(self, geom: Polygon) -> None:
+        centroid = geom.centroid
+        point_tuple = (centroid.x, centroid.y)
         self.deviation += dist(point_tuple, self.population_center)
 
     @classmethod

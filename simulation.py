@@ -43,8 +43,8 @@ class GerrymanderingSimulation:
     borders: Dict[int, int] = field(default_factory=dict)
     districts: List[District] = field(default_factory=list)
 
-    weight_dict: WeightDict = field(default_factory=WeightDict)
-    weights: WeightValues = field(default_factory=WeightValues)
+    weight_dict: Optional[WeightDict] = None
+    weights: Optional[WeightValues] = None
     score: float = -1.
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
@@ -233,9 +233,8 @@ class GerrymanderingSimulation:
 
             for neighbor in neighbors:
                 second_class = self.map.at[neighbor, 'district']
-                if second_class == first_class or \
-                        self.eliminate_district(first_pixel) or \
-                        self.district_breaks(first_pixel, neighbor):
+                # TODO: put eliminate district back
+                if second_class == first_class or self.district_breaks(first_pixel, neighbor):
                     continue
                 second_pixel = neighbor
                 break
@@ -259,20 +258,16 @@ class GerrymanderingSimulation:
 
 
 def test():
-    with open('pix.pickle', 'rb') as fp:
+    with open('test_map.pickle', 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
-    pixel_map.desired_results = np.array([1, 2, 3])
-    pixel_map.initialize_districts()
+    sim = GerrymanderingSimulation(pixel_map, 13)
 
-    fig, ax = plt.subplots()
-    pixel_map.map.plot(column='district', ax=ax)
-    ax.axis('off')
-    plt.show()
+    sim.set_desired_results(np.array([1, 2, 3]))
+    sim.set_centering_weights()
+    sim.initialize_districts()
 
-    # for _ in range(100):
-    #     first, second = pixel_map.pick_swap_pair()
-    #     pixel_map.swap_pixels(first, second)
+    sim.show_districts()
 
 
 def main():
