@@ -13,7 +13,6 @@ from tqdm import tqdm as progress
 
 from districts import District
 from scorers import WeightValues, WeightDict
-from utilities import shapely_to_array
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -70,8 +69,7 @@ class GerrymanderingSimulation:
     def tessellate(self) -> None:
         """This function creates a Vornoi tesselation based on the internal pixel map."""
         # convert points into an array to use in cdist
-        points = [poly.centroid for poly in self.map['geometry'].values]
-        point_array = shapely_to_array(points)
+        point_array = self.map['np_geometry'].to_numpy()
 
         # randomly select self.num_districts unique Pixels in the map
         index = np.random.choice(point_array.shape[0], self.num_districts, replace=False)
@@ -339,18 +337,24 @@ def test():
 
 
 def main():
-    # import cProfile
-    # import pstats
-    #
-    # with cProfile.Profile() as pr:
-    #     pass
-    #
-    # stats = pstats.Stats(pr)
-    # stats.sort_stats(pstats.SortKey.TIME)
-    # stats.dump_stats(filename='profile.prof')
-    pass
+    with open('test_map.pickle', 'rb') as fp:
+        pixel_map: gpd.GeoDataFrame = pickle.load(fp)
+
+    sim = GerrymanderingSimulation(pixel_map, 13)
+    sim.set_desired_results(np.array([1, 2, 3]))
+
+    import cProfile
+    import pstats
+
+    with cProfile.Profile() as pr:
+        sim.initialize_districts()
+        sim.gerrymander(1000, 1000, 1000)
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.dump_stats(filename='profile.prof')
 
 
 if __name__ == '__main__':
-    # main()
-    test()
+    main()
+    # test()

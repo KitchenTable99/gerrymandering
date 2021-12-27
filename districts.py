@@ -8,8 +8,6 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import Polygon
 
-from utilities import shapely_to_array
-
 
 @dataclass
 class District:
@@ -72,8 +70,7 @@ class District:
         pop, red, blue = df[['population', 'red_votes', 'blue_votes']].sum()
 
         # find population center
-        shapely_points = df['geometry'].centroid
-        points = shapely_to_array(shapely_points)
+        points = df['np_geometry'].to_numpy()
         center = np.average(points, weights=df['population'].to_numpy(), axis=0)
 
         return District(pop, red, blue, center)

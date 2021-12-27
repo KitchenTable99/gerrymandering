@@ -152,6 +152,13 @@ def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFram
     return pixel_map
 
 
+def add_numpy_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf['np_geometry'] = gdf.apply(lambda row: np.array((row['geometry'].centroid.x, row['geometry'].centroid.y)),
+                                   axis=1)
+
+    return gdf
+
+
 def main():
     nc_votes = gpd.read_file('./nc_data/voters_shapefile/NC_G18.shp')
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
@@ -160,6 +167,7 @@ def main():
     nc_pop = gpd.read_file('./nc_data/population.geojson')
 
     nc_map = make_pixel_map(nc_votes, nc_pop, .1, verbose=True)
+    nc_map = add_numpy_geometry(nc_map)
     nc_map.to_pickle('full_map.pickle')
 
 
