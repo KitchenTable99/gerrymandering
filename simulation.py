@@ -9,6 +9,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial import distance
+from tqdm import tqdm as progress
 
 from districts import District
 from scorers import WeightValues, WeightDict
@@ -117,6 +118,7 @@ class GerrymanderingSimulation:
         self.map.apply(lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
 
         # score the map
+        self.weights = WeightValues(0, np.diag((100, 100, 100)), .5)
         self.score = self.evaluate()
 
     def evaluate(self, districts: Optional[List[District]] = None) -> float:
@@ -148,7 +150,7 @@ class GerrymanderingSimulation:
         # TODO: actually fit the results to some curve
         scoring[2] = 1
 
-        return self.weights.scoring_weights @ scoring.T  # TODO: check that this returns a float
+        return np.sum(self.weights.scoring_weights @ scoring.T)
 
     def district_breaks(self, first: int, second: int) -> bool:
         """This function determines if giving the first pixel the class of the second will break any district.
@@ -246,8 +248,10 @@ class GerrymanderingSimulation:
     def swap_pixels(self, first: int, second: int) -> None:
         # any reference to districts will be f_district or s_district for first or second district
         # make copies of original districts
-        f_district_copy = deepcopy(self.districts[first])
-        s_district_copy = deepcopy(self.districts[second])
+        f_class = self.map.at[first, 'district']
+        s_class = self.map.at[second, 'district']
+        f_district_copy = deepcopy(self.districts[f_class])
+        s_district_copy = deepcopy(self.districts[s_class])
 
         # remove pixel
         first_data = self.map.loc[first]
@@ -258,13 +262,13 @@ class GerrymanderingSimulation:
         # recalculate deviations
         f_district_copy.reset_deviation()
         s_district_copy.reset_deviation()
-        self.map.loc[self.map['district'] in (first, second)].apply(
+        self.map.loc[self.map['district'].isin((f_class, s_class))].apply(
             lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
 
         # re-score the map
         to_score = deepcopy(self.districts)
-        to_score[first] = f_district_copy
-        to_score[second] = s_district_copy
+        to_score[f_class] = f_district_copy
+        to_score[s_class] = s_district_copy
         new_score = self.evaluate(to_score)
 
         # if the map is worse and fails the vibe check, return
@@ -275,22 +279,34 @@ class GerrymanderingSimulation:
         self.score = new_score
         self.districts = to_score
         self.map.at[first, 'district'] = self.map.at[second, 'district']
-        # TODO: update borders
+
+        # update border status of the swapped pixel and all its neighbors
+        update_borders = {first}
+        for pixel in self.map.at[first, 'neighbors']:
+            update_borders.add(pixel)
+        for pixel in update_borders:
+            focus_neighbors = self.map.at[pixel, 'neighbors']
+            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors]
+            pixel_class = self.map.at[pixel, 'district']
+            different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
+            self.borders[pixel] = sum(different_classes)
 
     def gerrymander(self, num_center_swaps: int, num_explore_swaps: int, num_electioneer_swaps: int) -> None:
+        if np.sum(self.desired_results) == 0:
+            raise Exception('You need to set the desired results')
         # three phases
         self.set_centering_weights()
-        for _ in range(num_center_swaps):
+        for _ in progress(range(num_center_swaps), desc='Centering'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
 
         self.set_exploring_weights()
-        for _ in range(num_explore_swaps):
+        for _ in progress(range(num_explore_swaps), desc='Exploring'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
 
         self.set_electioneering_weights()
-        for _ in range(num_electioneer_swaps):
+        for _ in progress(range(num_electioneer_swaps), desc='Electioneering'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
 
@@ -316,29 +332,13 @@ def test():
     sim = GerrymanderingSimulation(pixel_map, 13)
 
     sim.set_desired_results(np.array([1, 2, 3]))
-    sim.set_centering_weights()
     sim.initialize_districts()
+    sim.gerrymander(1000, 1000, 1000)
 
     sim.show_districts()
 
 
 def main():
-    nc_votes = gpd.read_file('./nc_data/voters_shapefile/NC_G18.shp')
-    nc_pop = gpd.read_file('./nc_data/population.geojson')
-    nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
-        columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
-
-    nc_pixel_map = None
-    # TODO: find a way to set these metrics
-    nc_pixel_map.keep_bad_maps = .5
-    nc_pixel_map.surface_tension_weight = 3
-    nc_pixel_map.weights = np.array([1, 2, 3])
-    nc_pixel_map.desired_results = np.array([1, 2, 3])
-    nc_pixel_map.initialize_districts()
-
-    with open('pix.pickle', 'wb') as fp:
-        pickle.dump(nc_pixel_map, fp)
-
     # import cProfile
     # import pstats
     #
@@ -348,6 +348,7 @@ def main():
     # stats = pstats.Stats(pr)
     # stats.sort_stats(pstats.SortKey.TIME)
     # stats.dump_stats(filename='profile.prof')
+    pass
 
 
 if __name__ == '__main__':
