@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pickle
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from pixel_classes import *
+from simulation import *
 
 
 @dataclass

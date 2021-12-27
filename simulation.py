@@ -1,37 +1,17 @@
 # the code for the Pixel and PixelMap classes
 import pickle
 import random
-from copy import deepcopy
 from dataclasses import dataclass, field
-from math import ceil, dist
-from typing import List, Dict, Tuple, Generator, Optional
+from typing import List, Dict, Tuple, Optional, Generator
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import shapely as shapely
 from scipy.spatial import distance
-from shapely.geometry import Polygon
-from scorers import *
 
-
-def pixel_to_center(pixel_centroid: shapely.geometry.Point, district: 'District') -> float:
-    # find centers
-    pixel_center = (pixel_centroid.x, pixel_centroid.y)
-    district_center = district.get_center()
-
-    # calculate distance
-    return dist(pixel_center, district_center)
-
-
-def initialize_pixel_dist(row: pd.Series, districts: List['District']) -> None:
-    district = districts[row['district']]
-    pixel_centroid = row['geometry'].centroid
-
-    pix_dist = pixel_to_center(pixel_centroid, district)
-    district.add_pixel_deviation(row['square_num'], pix_dist)
-    district.add_pixel_centroid(row['square_num'], pixel_centroid)
+from districts import District
+from scorers import WeightValues, WeightDict
+from utilities import shapely_to_array
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -54,80 +34,6 @@ def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, 
     np.random.shuffle(freq_list)
     for counter in range(len(freq_list) - 1):
         yield freq_list[counter]
-
-
-def shapely_to_array(points: List[shapely.geometry.Point]) -> np.ndarray:
-    """This function converts a list of shapely points into an array of points to be used in cdist.
-
-        :param points. A list of points from the shapely library
-
-        :returns an array of points
-    """
-    point_tuples = [(point.x, point.y) for point in points]
-
-    return np.array([*point_tuples])
-
-
-@dataclass
-class District:
-
-    population: float
-    population_center: np.ndarray
-    red_votes: float
-    blue_votes: float
-
-    pixel_deviations: Dict[int,  float] = field(default_factory=dict)
-    pixel_centroids: Dict[int, shapely.geometry.Point] = field(default_factory=dict)
-
-    @property
-    def election_result(self) -> float:
-        return self.red_votes / self.blue_votes
-
-    @property
-    def deviation(self) -> float:
-        return sum(self.pixel_deviations.values())
-
-    def get_center(self) -> np.ndarray:
-        return self.population_center
-
-    def add_pixel_deviation(self, pix_num: int, pix_dist: float) -> None:
-        """This function adds an entry into the internal pixel deviations dictionary. If an entry is already present,
-           nothing further happens.
-
-           :param pix_num: the number of the pixel. the GeoDataFrame refers to this as square_num
-           :param pix_dist: the distance the center of that pixel is from the center of the district
-        """
-        if self.pixel_deviations.get(pix_num):
-            return
-
-        self.pixel_deviations[pix_num] = pix_dist
-
-    def add_pixel_centroid(self, pix_num: int, pix_centroid: shapely.geometry.Point) -> None:
-        """This function adds an entry into the internal pixel deviations dictionary. If an entry is already present,
-           nothing further happens.
-
-           :param pix_num: the number of the pixel. the GeoDataFrame refers to this as square_num
-           :param pix_centroid: the centroid of the pixel to add
-        """
-        if self.pixel_centroids.get(pix_num):
-            return
-
-        self.pixel_centroids[pix_num] = pix_centroid
-
-    def add_pixel(self, pix_pop: float, pix_red: float, pix_blue: float, pix_num: int, pix_center: shapely.geometry.Point) -> None:
-        # update the basic sum quantities
-        self.population += pix_pop
-        self.red_votes += pix_red
-        self.blue_votes += pix_blue
-
-        # edit center
-        # TODO: actually edit the center
-
-        # update the old pixels with the new center
-        for pix, centroid in self.pixel_centroids.items():
-            new_dist = pixel_to_center(centroid, self)
-            self.pixel_deviations[pix] = new_dist
-        # add in the new pixel to the new center
 
 
 @dataclass
@@ -203,31 +109,14 @@ class GerrymanderingSimulation:
         self.borders = borders
 
         # create the border objects
-        self.create_district_objs()
+        self.districts = [District.from_df(self.map[self.map['district'] == district])
+                          for district in range(self.num_districts)]
 
         # find the distance from each pixel to its population center
-        self.map.apply(lambda row: initialize_pixel_dist(row, self.districts), axis=1)
+        self.map.apply(lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
 
         # score the map
         self.score = self.evaluate()
-
-    def create_district_objs(self) -> None:
-        """This function creates the district objects that are used to calculate score."""
-        # rotate over each district
-        district_objs = []
-        for district in range(self.num_districts):
-            # find simple sum metrics
-            gdf = self.map[self.map['district'] == district]
-            pop, red, blue = gdf[['population', 'red_votes', 'blue_votes']].sum()
-
-            # find population center
-            shapely_points = gdf['geometry'].centroid
-            points = shapely_to_array(shapely_points)
-            center = np.average(points, weights=gdf['population'].to_numpy(), axis=0)
-
-            district_objs.append(District(pop, center, red, blue))
-
-        self.districts = district_objs
 
     def evaluate(self, districts: Optional[List[District]] = None) -> float:
         """This function scores a list of districts. It could be a set of actual districts or a hypothetical set when
@@ -392,7 +281,7 @@ def main():
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
-    nc_pixel_map = PixelMap(nc_votes, nc_pop, 1, 13)
+    nc_pixel_map = None
     # TODO: find a way to set these metrics
     nc_pixel_map.keep_bad_maps = .5
     nc_pixel_map.surface_tension_weight = 3
