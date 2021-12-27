@@ -261,10 +261,7 @@ class GerrymanderingSimulation:
         # recalculate deviations
         for district in self.districts:
             district.reset_deviation()
-        # f_district_copy.reset_deviation()
-        # s_district_copy.reset_deviation()
-        # these three lines basically perform a pd.apply but vectorized for performance
-        # changed_centers = self.map.loc[self.map['district'].isin((f_class, s_class))]
+        # these two lines basically perform a pd.apply but vectorized for performance
         v = np.vectorize(lambda d, g: self.districts[d].add_deviation(g))
         v(self.map.district, self.map.np_geometry)
 
@@ -336,7 +333,7 @@ def test():
 
     sim.set_desired_results(np.array([1, 2, 3]))
     sim.initialize_districts()
-    sim.gerrymander(100, 100, 100)
+    sim.gerrymander(10_000, 1000, 10_000)
 
     sim.show_districts()
 
@@ -346,14 +343,14 @@ def main():
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
     sim = GerrymanderingSimulation(pixel_map, 13)
-    sim.set_desired_results(np.array([1, 2, 3]))
+    sim.set_desired_results(np.repeat(.6, 13))
 
     import cProfile
     import pstats
 
     with cProfile.Profile() as pr:
         sim.initialize_districts()
-        sim.gerrymander(1000, 1000, 1000)
+        sim.gerrymander(100_000, 1000, 10_000)
 
     stats = pstats.Stats(pr)
     stats.sort_stats(pstats.SortKey.TIME)
@@ -361,5 +358,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # test()
+    # main()
+    test()
