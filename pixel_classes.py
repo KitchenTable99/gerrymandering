@@ -137,14 +137,27 @@ class GerrymanderingSimulation:
     borders: Dict[int, int] = field(default_factory=dict)
     districts: List[District] = field(default_factory=list)
 
-    score: float = -1.
     weight_dict: WeightDict = field(default_factory=WeightDict)
+    weights: WeightValues = field(default_factory=WeightValues)
+    score: float = -1.
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
     def __post_init__(self):
         self.weight_dict = WeightDict(WeightValues(3, np.diag((10, 20, 3)), .5),
                                       WeightValues(1, np.diag((1, 1, 1)), .75),
                                       WeightValues(3, np.diag((1, 2, 30)), .5))
+
+    def set_centering_weights(self) -> None:
+        self.weights = self.weight_dict.centering
+
+    def set_exploring_weights(self) -> None:
+        self.weights = self.weight_dict.exploring
+
+    def set_electioneering_weights(self) -> None:
+        self.weights = self.weight_dict.electioneering
+
+    def set_desired_results(self, results: np.ndarray) -> None:
+        self.desired_results = results
 
     def tessellate(self) -> None:
         """This function creates a Vornoi tesselation based on the internal pixel map."""
@@ -224,6 +237,10 @@ class GerrymanderingSimulation:
 
            :return the score represented by a float
         """
+        # make sure that there are desired results before scoring
+        # TODO: put this in a better place
+        if np.sum(self.desired_results) == 0:
+            raise Exception('You need to specify election results before running the simulation')
         # see if method should score the internal districts
         if not districts:
             districts = self.districts
@@ -241,7 +258,7 @@ class GerrymanderingSimulation:
         # TODO: actually fit the results to some curve
         scoring[2] = 1
 
-        return self.weights @ scoring.T  # TODO: check that this returns a float
+        return self.weights.scoring_weights @ scoring.T  # TODO: check that this returns a float
 
     def district_breaks(self, first: int, second: int) -> bool:
         """This function determines if giving the first pixel the class of the second will break any district.
@@ -303,6 +320,7 @@ class GerrymanderingSimulation:
 
            :return whether or not the pixel is the last in the district
         """
+        # TODO: reimplement using district objects
         remove_pop = self.map.at[remove_pixel, 'population']
         remove_class = self.map.at[remove_pixel, 'district']
 
@@ -314,7 +332,7 @@ class GerrymanderingSimulation:
            :returns the indices of the first and second pixels to switch
         """
         # randomly select the first pixel
-        random_borders = border_generator(self.borders, self.surface_tension_weight)
+        random_borders = border_generator(self.borders, self.weights.statistical_surface_tension)
         while True:
             # get a border pixel that we haven't tried yet
             first_pixel = next(random_borders)
@@ -336,105 +354,6 @@ class GerrymanderingSimulation:
                 continue
             return first_pixel, second_pixel
 
-    def swap_pixels(self, first: int, second: int) -> bool:
-        """This function tries to swap the passed pixels. Always swap if the map is better, randomly swap if map is
-           worse. Returns whether or not the swap took place.
-
-           :param first: the pixel to inherit the class of the second
-           :param second: the pixel to give the class to first
-
-           :returns whether or not a swap took place
-        """
-        # o_district will represent the original district
-        # d_district will represent the destination district
-        o_district = self.map.at[first, 'district']
-        d_district = self.map.at[second, 'district']
-
-        # keep a copy of the two districts that will change
-        old_o_district = deepcopy(self.districts[o_district])
-        old_d_district = deepcopy(self.districts[d_district])
-
-        # swap district
-        self.map.at[first, 'district'] = d_district
-
-        # update metrics
-        pop = self.map.at[first, 'population']
-        red = self.map.at[first, 'red_votes']
-        blue = self.map.at[first, 'blue_votes']
-
-        # create new districts
-        # population
-        origin_new_pop = self.populations[o_district] - pop
-        destination_new_pop = self.populations[d_district] + pop
-        # centers
-        # this is fairly easy to follow if you remove an arbitrary item from an average
-        # back of the napkin math shows the formula
-        # the relative unreadability is just because of how funky it is to type out math
-        # TODO: fix this formula to use weighted count (population)
-        c = self.populations[o_district]
-        n = self.counts[o_district]
-        pixel_point = self.map.at[first, 'geometry'].centroid
-        pixel_arr = np.array([pixel_point.x, pixel_point.y])
-
-        origin_new_center = ((c*n) - pixel_arr) / (n - 1)
-
-        d = self.populations[d_district]
-        n = self.counts[d_district]
-
-        destination_new_center = ((d*n) + pixel_arr) / (n + 1)
-        # results
-        origin_new_red = self.red_totals[o_district] - red
-        origin_new_blue = self.blue_totals[o_district] - blue
-        destination_new_red = self.red_totals[d_district] + red
-        destination_new_blue = self.red_totals[d_district] + blue
-
-        # score itself
-        # duplicate the arrays
-        n_populations = self.populations.copy()
-        n_populations[o_district] = origin_new_pop
-        n_populations[d_district] = destination_new_pop
-
-        n_centers = self.centers.copy()
-        n_centers[o_district] = origin_new_center
-        n_centers[d_district] = destination_new_center
-
-        n_red = self.red_totals.copy()
-        n_red[o_district] = origin_new_red
-        n_red[d_district] = destination_new_red
-
-        n_blue = self.blue_totals.copy()
-        n_blue[o_district] = origin_new_blue
-        n_blue[d_district] = destination_new_blue
-
-        new_score = self.evaluate(n_populations, n_centers, n_red, n_blue)
-
-        if new_score > self.score and random.random() < self.keep_bad_maps:
-            self.map.at[first, 'class'] = o_district
-            return False
-
-        # update the internal fields
-        self.counts[o_district] -= 1
-        self.counts[d_district] += 1
-
-        self.populations = n_populations
-        self.centers = n_centers
-        self.red_totals = n_red
-        self.blue_totals = n_blue
-
-        # check swapped pixel and its neighbors for border state
-        update_borders = {first}
-        for neighbor in self.map.at[first, 'neighbors']:
-            update_borders.add(neighbor)
-
-        for pixel in update_borders:
-            focus_neighbors = self.map.at[pixel, 'neighbors']
-            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors]
-            pixel_class = self.map.at[pixel, 'district']
-            different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
-            self.borders[pixel] = sum(different_classes)
-
-        return True
-
     def show_districts(self):
         """This function plots a choropleth of the internal GeoDataFrame with the district as the color var."""
         self.map.plot(column='district')
@@ -452,9 +371,8 @@ class GerrymanderingSimulation:
 
 def test():
     with open('pix.pickle', 'rb') as fp:
-        pixel_map: PixelMap = pickle.load(fp)
+        pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
-    pixel_map.weights = np.array([1, 2, 3])
     pixel_map.desired_results = np.array([1, 2, 3])
     pixel_map.initialize_districts()
 
