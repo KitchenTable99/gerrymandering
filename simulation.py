@@ -70,6 +70,7 @@ class GerrymanderingSimulation:
         """This function creates a Vornoi tesselation based on the internal pixel map."""
         # convert points into an array to use in cdist
         point_array = self.map['np_geometry'].to_numpy()
+        point_array = np.vstack(point_array)
 
         # randomly select self.num_districts unique Pixels in the map
         index = np.random.choice(point_array.shape[0], self.num_districts, replace=False)
@@ -113,7 +114,7 @@ class GerrymanderingSimulation:
                           for district in range(self.num_districts)]
 
         # find the distance from each pixel to its population center
-        self.map.apply(lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
+        self.map.apply(lambda row: self.districts[row['district']].add_deviation(row['np_geometry']), axis=1)
 
         # score the map
         self.weights = WeightValues(0, np.diag((100, 100, 100)), .5)
@@ -261,7 +262,7 @@ class GerrymanderingSimulation:
         f_district_copy.reset_deviation()
         s_district_copy.reset_deviation()
         self.map.loc[self.map['district'].isin((f_class, s_class))].apply(
-            lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
+            lambda row: self.districts[row['district']].add_deviation(row['np_geometry']), axis=1)
 
         # re-score the map
         to_score = deepcopy(self.districts)
@@ -331,7 +332,7 @@ def test():
 
     sim.set_desired_results(np.array([1, 2, 3]))
     sim.initialize_districts()
-    sim.gerrymander(1000, 1000, 1000)
+    sim.gerrymander(100, 100, 100)
 
     sim.show_districts()
 

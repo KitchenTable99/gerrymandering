@@ -6,7 +6,6 @@ from typing import Union
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Polygon
 
 
 @dataclass
@@ -22,10 +21,8 @@ class District:
     def election_result(self) -> float:
         return self.red_votes / self.blue_votes
 
-    def add_deviation(self, geom: Polygon) -> None:
-        centroid = geom.centroid
-        point_tuple = (centroid.x, centroid.y)
-        self.deviation += dist(point_tuple, self.population_center)
+    def add_deviation(self, geom: np.ndarray) -> None:
+        self.deviation += dist(geom, self.population_center)
 
     def reset_deviation(self) -> None:
         self.deviation = 0
@@ -39,8 +36,7 @@ class District:
         # population center
         # this seems like crazy math, but back-of-the-napkin calculations will show how to add an item
         # from a weighted average
-        centroid = pixel_data['geometry'].centroid
-        pixel_center = np.array((centroid.x, centroid.y))
+        pixel_center = pixel_data['np_geometry']
         self.population_center *= self.population
         self.population_center += pixel_center * pixel_data['population']
         self.population_center /= new_population
@@ -56,8 +52,7 @@ class District:
         # population center
         # this seems like crazy math, but back-of-the-napkin calculations will show how to remove an item
         # from a weighted average
-        centroid = pixel_data['geometry'].centroid
-        pixel_center = np.array((centroid.x, centroid.y))
+        pixel_center = pixel_data['np_geometry']
         self.population_center *= self.population
         self.population_center -= pixel_center * pixel_data['population']
         self.population_center /= new_population
