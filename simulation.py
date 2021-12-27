@@ -1,6 +1,7 @@
 # the code for the Pixel and PixelMap classes
 import pickle
 import random
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Generator
 
@@ -209,11 +210,10 @@ class GerrymanderingSimulation:
 
            :return whether or not the pixel is the last in the district
         """
-        # TODO: reimplement using district objects
         remove_pop = self.map.at[remove_pixel, 'population']
         remove_class = self.map.at[remove_pixel, 'district']
 
-        return self.populations[remove_class] - remove_pop <= 0
+        return self.districts[remove_class].population - remove_pop <= 0
 
     def pick_swap_pair(self) -> Tuple[int, int]:
         """This function picks the pixel to switch.
@@ -233,14 +233,66 @@ class GerrymanderingSimulation:
 
             for neighbor in neighbors:
                 second_class = self.map.at[neighbor, 'district']
-                # TODO: put eliminate district back
-                if second_class == first_class or self.district_breaks(first_pixel, neighbor):
+                if second_class == first_class or \
+                        self.district_breaks(first_pixel, neighbor) or \
+                        self.eliminate_district(first_pixel):
                     continue
                 second_pixel = neighbor
                 break
             else:
                 continue
             return first_pixel, second_pixel
+
+    def swap_pixels(self, first: int, second: int) -> None:
+        # any reference to districts will be f_district or s_district for first or second district
+        # make copies of original districts
+        f_district_copy = deepcopy(self.districts[first])
+        s_district_copy = deepcopy(self.districts[second])
+
+        # remove pixel
+        first_data = self.map.loc[first]
+        f_district_copy.remove_pixel(first_data)
+        # add pixel
+        s_district_copy.add_pixel(first_data)
+
+        # recalculate deviations
+        f_district_copy.reset_deviation()
+        s_district_copy.reset_deviation()
+        self.map.loc[self.map['district'] in (first, second)].apply(
+            lambda row: self.districts[row['district']].add_deviation(row['geometry']), axis=1)
+
+        # re-score the map
+        to_score = deepcopy(self.districts)
+        to_score[first] = f_district_copy
+        to_score[second] = s_district_copy
+        new_score = self.evaluate(to_score)
+
+        # if the map is worse and fails the vibe check, return
+        if new_score > self.score and random.random() > self.weights.keep_bad_maps:
+            return
+
+        # update the score, district objects, pixel classification
+        self.score = new_score
+        self.districts = to_score
+        self.map.at[first, 'district'] = self.map.at[second, 'district']
+        # TODO: update borders
+
+    def gerrymander(self, num_center_swaps: int, num_explore_swaps: int, num_electioneer_swaps: int) -> None:
+        # three phases
+        self.set_centering_weights()
+        for _ in range(num_center_swaps):
+            first, second = self.pick_swap_pair()
+            self.swap_pixels(first, second)
+
+        self.set_exploring_weights()
+        for _ in range(num_explore_swaps):
+            first, second = self.pick_swap_pair()
+            self.swap_pixels(first, second)
+
+        self.set_electioneering_weights()
+        for _ in range(num_electioneer_swaps):
+            first, second = self.pick_swap_pair()
+            self.swap_pixels(first, second)
 
     def show_districts(self):
         """This function plots a choropleth of the internal GeoDataFrame with the district as the color var."""

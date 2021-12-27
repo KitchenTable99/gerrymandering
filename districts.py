@@ -29,6 +29,9 @@ class District:
         point_tuple = (centroid.x, centroid.y)
         self.deviation += dist(point_tuple, self.population_center)
 
+    def reset_deviation(self) -> None:
+        self.deviation = 0
+
     @classmethod
     def from_df(cls, df: Union[pd.DataFrame, gpd.GeoDataFrame]) -> 'District':
         # find simple sum metrics
