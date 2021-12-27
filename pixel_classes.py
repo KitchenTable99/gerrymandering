@@ -13,6 +13,7 @@ import pandas as pd
 import shapely as shapely
 from scipy.spatial import distance
 from shapely.geometry import Polygon
+from scorers import *
 
 
 def pixel_to_center(pixel_centroid: shapely.geometry.Point, district: 'District') -> float:
@@ -136,11 +137,14 @@ class GerrymanderingSimulation:
     borders: Dict[int, int] = field(default_factory=dict)
     districts: List[District] = field(default_factory=list)
 
-    score: float = 0.
-    surface_tension_weight: int = 3
-    keep_bad_maps: float = 0.
-    weights: np.ndarray = field(default_factory=lambda: np.zeros(shape=3))
+    score: float = -1.
+    weight_dict: WeightDict = field(default_factory=WeightDict)
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
+
+    def __post_init__(self):
+        self.weight_dict = WeightDict(WeightValues(3, np.diag((10, 20, 3)), .5),
+                                      WeightValues(1, np.diag((1, 1, 1)), .75),
+                                      WeightValues(3, np.diag((1, 2, 30)), .5))
 
     def tessellate(self) -> None:
         """This function creates a Vornoi tesselation based on the internal pixel map."""
