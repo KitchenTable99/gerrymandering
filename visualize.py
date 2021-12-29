@@ -1,16 +1,20 @@
 # the code to visualize map change
+from typing import List
 
 import geopandas as gpd
 from dataclasses import dataclass
 import pickle
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.animation import FuncAnimation
-from simulation import *
+
+from districts import District
+from simulation import GerrymanderingSimulation
 
 
 @dataclass
 class PixelMapAnimator:
-    map: PixelMap
+    map: GerrymanderingSimulation
     fig: plt.Figure
     ax: plt.Axes
     frame_gap: int
@@ -20,21 +24,36 @@ class PixelMapAnimator:
 
     def __call__(self, i: int) -> None:
         if i == 0:
-            self.map.map.plot(ax=self.ax, column='class')
+            self.map.map.plot(ax=self.ax, column='district')
             return self.ax.get_children()
+        elif i <= 100:
+            self.map.set_centering_weights()
+            for _ in range(self.frame_gap):
+                first, second = self.map.pick_swap_pair()
+                self.map.swap_pixels(first, second)
+            self.map.map.plot(ax=self.ax, column='district')
+        elif i <= 150:
+            self.map.set_exploring_weights()
+            for _ in range(self.frame_gap):
+                first, second = self.map.pick_swap_pair()
+                self.map.swap_pixels(first, second)
+            self.map.map.plot(ax=self.ax, column='district')
+        else:
+            self.map.set_electioneering_weights()
+            for _ in range(self.frame_gap):
+                first, second = self.map.pick_swap_pair()
+                self.map.swap_pixels(first, second)
+            self.map.map.plot(ax=self.ax, column='district')
 
-        for _ in range(self.frame_gap):
-            first, second = self.map.pick_swap_pair()
-            self.map.swap_pixels(first, second)
-        self.map.map.plot(ax=self.ax, column='class')
         return self.ax.get_children()
 
 
 def time():
     with open('pix.pickle', 'rb') as fp:
-        pixel_map: PixelMap = pickle.load(fp)
+        pixel_map: gpd.GeoDataFrame = pickle.load(fp)
+    sim = GerrymanderingSimulation(pixel_map, 13)
     fig, ax = plt.subplots(1)
-    animator = PixelMapAnimator(pixel_map, fig, ax, 1)
+    animator = PixelMapAnimator(sim, fig, ax, 1)
     import timeit
 
     # print(timeit.timeit(lambda: animator(1), number=10))
@@ -51,13 +70,17 @@ def time():
 
 
 def save():
-    with open('pix.pickle', 'rb') as fp:
-        pixel_map: PixelMap = pickle.load(fp)
+    with open('test_map.pickle', 'rb') as fp:
+        pixel_map: gpd.GeoDataFrame = pickle.load(fp)
+
+    sim = GerrymanderingSimulation(pixel_map, 13)
+
+    sim.set_desired_results(np.repeat(.6, 13))
+    sim.initialize_districts()
 
     fig, ax = plt.subplots(1)
-    pixel_map.weights = np.array([10, 20, 0])
-    animator = PixelMapAnimator(pixel_map, fig, ax, 1000)
-    anim = FuncAnimation(fig, animator, frames=50, interval=500)
+    animator = PixelMapAnimator(sim, fig, ax, 100)
+    anim = FuncAnimation(fig, animator, frames=260, interval=450)
     anim.save('testing.gif', writer='imagemagick', fps=10)
 
 
@@ -67,7 +90,7 @@ def main():
 
     fig, ax = plt.subplots(1)
     pixel_map.weights = np.array([10, 20, 0])
-    animator = PixelMapAnimator(pixel_map, fig, ax, 1000)
+    animator = PixelMapAnimator(pixel_map, fig, ax, 100)
     anim = FuncAnimation(fig, animator, frames=100, interval=1000)
     plt.show()
 
