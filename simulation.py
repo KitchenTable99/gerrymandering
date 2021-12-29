@@ -47,12 +47,13 @@ class GerrymanderingSimulation:
     weight_dict: Optional[WeightDict] = None
     weights: Optional[WeightValues] = None
     score: float = -1.
+    start_score: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
     def __post_init__(self):
-        self.weight_dict = WeightDict(WeightValues(3, np.diag((10, 20, 3)), .5),
-                                      WeightValues(1, np.diag((1, 1, 1)), .75),
-                                      WeightValues(3, np.diag((1, 2, 30)), .5))
+        self.weight_dict = WeightDict(WeightValues(3, np.array((100, 100, 1)), .5),
+                                      WeightValues(1, np.array((30, 30, 30)), .75),
+                                      WeightValues(3, np.array((3, 5, 5)), .5))
 
     def set_centering_weights(self) -> None:
         self.weights = self.weight_dict.centering
@@ -82,48 +83,63 @@ class GerrymanderingSimulation:
         # assign each pixel to the appropriate class
         self.map['district'] = assignments
 
-    def initialize_districts(self) -> None:
+    def initialize_districts(self, verbose: bool = False) -> None:
         """This function initializes the districts by tessellating the map, finding the borders,
            creating district objects, and calculating starting properties of those districts."""
         # assign each pixel to a district
+        if verbose:
+            print('Tessellating...')
         self.tessellate()
 
         # find the borders using a BFS
+        if verbose:
+            print('Finding neighbors...')
+            pbar = progress(total=len(self.map))
+
+        # get all the stuff out of the DataFrame
+        neighbors_arr = self.map['neighbors'].to_numpy()
+        district_arr = self.map['district'].to_numpy()
+        squares = self.map.index.to_numpy()
+        rows = self.map['row_num'].to_numpy()
+        square_to_row = {s: r for s, r in zip(squares, rows)}
         borders = {}
-        visited = [self.map.index.values[0]]
-        queue = [self.map.index.values[0]]
-        while queue:
-            focus = queue.pop(0)
-            neighbors = self.map.at[focus, 'neighbors']
-            focus_class = self.map.at[focus, 'district']
+        for row_num, square_num in enumerate(squares):
+            if verbose:
+                pbar.update(n=1)
+            neighbors = neighbors_arr[row_num]
+            focus_class = district_arr[row_num]
 
-            neighbor_classes = []
-            for neighbor in neighbors:
-                neighbor_classes.append(self.map.at[neighbor, 'district'])
-                if neighbor not in visited:
-                    visited.append(neighbor)
-                    queue.append(neighbor)
-
+            neighbor_classes = [district_arr[square_to_row[neighbor]] for neighbor in neighbors]
             different_classes = [n_class != focus_class for n_class in neighbor_classes]
-            borders[focus] = sum(different_classes)
+            borders[square_num] = sum(different_classes)
+
+        if verbose:
+            pbar.close()
 
         self.borders = borders
 
         # create the border objects
+        if verbose:
+            print('Creating districts...')
         self.districts = [District.from_df(self.map[self.map['district'] == district])
                           for district in range(self.num_districts)]
 
         # find the distance from each pixel to its population center
+        if verbose:
+            print('Populating district distances...')
         self.map.apply(lambda row: self.districts[row['district']].add_deviation(row['np_geometry']), axis=1)
 
         # score the map
-        self.weights = WeightValues(0, np.diag((100, 100, 100)), .5)
-        self.score = self.evaluate()
+        if verbose:
+            print('Scoring...')
+        self.weights = WeightValues(0, np.array((999999, 999999, 999999)), .5)
+        self.score = self.evaluate(starting=True)
 
-    def evaluate(self, districts: Optional[List[District]] = None) -> float:
+    def evaluate(self, districts: Optional[List[District]] = None, starting: bool = False) -> float:
         """This function scores a list of districts. It could be a set of actual districts or a hypothetical set when
            switching pixels. If no list is passed, this method will evaluate the internal districts.
 
+           :param starting: Is this the first time the map is being scored?
            :param districts: A list of district objects to score
 
            :return the score represented by a float
@@ -143,13 +159,19 @@ class GerrymanderingSimulation:
         scoring[0] = np.sum(np.power(pop_arr, 4))
 
         # spread of population from center
-        scoring[1] = sum(district.deviation for district in districts)
+        scoring[1] = sum(district.deviation for district in districts) ** 4
 
         # calculate deviation from election results
-        # TODO: actually fit the results to some curve
-        scoring[2] = 1
+        sorted_results = sorted(district.election_result for district in districts)
+        least_squares = np.sum(np.square(np.diff(self.desired_results - sorted_results)))
+        scoring[2] = least_squares
 
-        return np.sum(self.weights.scoring_weights @ scoring.T)
+        if starting:
+            self.start_score = scoring
+        else:
+            scoring /= self.start_score
+
+        return self.weights.scoring_weights.T @ scoring
 
     def district_breaks(self, first: int, second: int) -> bool:
         """This function determines if giving the first pixel the class of the second will break any district.
@@ -249,35 +271,42 @@ class GerrymanderingSimulation:
         # make copies of original districts
         f_class = self.map.at[first, 'district']
         s_class = self.map.at[second, 'district']
-        f_district_copy = deepcopy(self.districts[f_class])
-        s_district_copy = deepcopy(self.districts[s_class])
+        f_district = self.districts[f_class]
+        s_district = self.districts[s_class]
+        old_f_deviation = f_district.deviation
+        old_s_deviation = s_district.deviation
 
         # remove pixel
         first_data = self.map.loc[first]
-        f_district_copy.remove_pixel(first_data)
+        f_district.remove_pixel(first_data)
         # add pixel
-        s_district_copy.add_pixel(first_data)
+        s_district.add_pixel(first_data)
 
-        # recalculate deviations
-        for district in self.districts:
-            district.reset_deviation()
+        # reset districts and calculate deviations
+        f_district.reset_deviation()
+        s_district.reset_deviation()
         # these two lines basically perform a pd.apply but vectorized for performance
-        v = np.vectorize(lambda d, g: self.districts[d].add_deviation(g))
-        v(self.map.district, self.map.np_geometry)
+        geom = self.map['np_geometry'].to_numpy()
+        districts = self.map['district'].to_numpy()
+        first_geom = geom[districts == f_class]
+        second_geom = geom[districts == s_class]
+        v = np.vectorize(lambda d, g: d.add_deviation(g))
+        v(f_district, first_geom)
+        v(s_district, second_geom)
 
         # re-score the map
-        to_score = deepcopy(self.districts)
-        to_score[f_class] = f_district_copy
-        to_score[s_class] = s_district_copy
-        new_score = self.evaluate(to_score)
+        new_score = self.evaluate()
 
         # if the map is worse and fails the vibe check, return
         if new_score > self.score and random.random() > self.weights.keep_bad_maps:
+            f_district.add_pixel(first_data)
+            s_district.remove_pixel(first_data)
+            f_district.deviation = old_f_deviation
+            s_district.deviation = old_s_deviation
             return
 
         # update the score, district objects, pixel classification
         self.score = new_score
-        self.districts = to_score
         self.map.at[first, 'district'] = self.map.at[second, 'district']
 
         # update border status of the swapped pixel and all its neighbors
@@ -331,26 +360,37 @@ def test():
 
     sim = GerrymanderingSimulation(pixel_map, 13)
 
-    sim.set_desired_results(np.array([1, 2, 3]))
-    sim.initialize_districts()
-    sim.gerrymander(10_000, 1000, 10_000)
+    sim.set_desired_results(np.repeat(.6, 13))
+    sim.initialize_districts(verbose=True)
+    import cProfile
+    import pstats
 
-    sim.show_districts()
+    with cProfile.Profile() as pr:
+        sim.gerrymander(10_000, 5000, 10_000)
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.dump_stats(filename='profile.prof')
+
+    # sim.show_districts()
 
 
 def main():
-    with open('test_map.pickle', 'rb') as fp:
-        pixel_map: gpd.GeoDataFrame = pickle.load(fp)
+    # with open('full_map.pickle', 'rb') as fp:
+    #     pixel_map: gpd.GeoDataFrame = pickle.load(fp)
+    #
+    # sim = GerrymanderingSimulation(pixel_map, 13)
+    # sim.set_desired_results(np.repeat(.6, 13))
+    # sim.initialize_districts(verbose=True)
 
-    sim = GerrymanderingSimulation(pixel_map, 13)
-    sim.set_desired_results(np.repeat(.6, 13))
+    with open('full_initial.pickle', 'rb') as fp:
+        sim = pickle.load(fp)
 
     import cProfile
     import pstats
 
     with cProfile.Profile() as pr:
-        sim.initialize_districts()
-        sim.gerrymander(100_000, 1000, 10_000)
+        sim.gerrymander(1000, 0, 0)
 
     stats = pstats.Stats(pr)
     stats.sort_stats(pstats.SortKey.TIME)
