@@ -1,7 +1,7 @@
 # this holds the code related to district objects
 from dataclasses import dataclass
 from math import dist
-from typing import Union
+from typing import Union, List
 
 import geopandas as gpd
 import numpy as np
@@ -15,11 +15,12 @@ class District:
     red_votes: float
     blue_votes: float
     population_center: np.ndarray
+    pixel_rows: List[int]
     deviation: float = 0.
 
     @property
     def election_result(self) -> float:
-        return self.red_votes / self.blue_votes
+        return self.red_votes / (self.red_votes + self.blue_votes)
 
     def add_deviation(self, geom: np.ndarray) -> None:
         self.deviation += dist(geom, self.population_center)
@@ -28,6 +29,9 @@ class District:
         self.deviation = 0
 
     def add_pixel(self, pixel_data: pd.Series) -> None:
+        # actually add the pixel row
+        self.pixel_rows.append(pixel_data['row_num'])
+
         # simple sums
         new_population = self.population + pixel_data['population']
         self.red_votes += pixel_data['red_votes']
@@ -44,6 +48,8 @@ class District:
         self.population = new_population
 
     def remove_pixel(self, pixel_data: pd.Series) -> None:
+        # actually remove the pixel row
+        self.pixel_rows.remove(pixel_data['row_num'])
         # simple sums
         new_population = self.population - pixel_data['population']
         self.red_votes -= pixel_data['red_votes']
@@ -68,4 +74,7 @@ class District:
         points = df['np_geometry'].to_numpy()
         center = np.average(points, weights=df['population'].to_numpy(), axis=0)
 
-        return District(pop, red, blue, center)
+        # get the pixel numbers
+        row_nums = df['row_num'].to_list()
+
+        return District(pop, red, blue, center, row_nums)
