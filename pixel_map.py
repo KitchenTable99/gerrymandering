@@ -52,7 +52,8 @@ def weighted_intersection(gdf1: gpd.GeoDataFrame, gdf2: gpd.GeoDataFrame, attr_s
     return gdf1.rename(columns={'attr_str': attr_str})
 
 
-def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFrame, resolution: float, verbose: bool = False) -> gpd.GeoDataFrame:
+def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFrame, resolution: float,
+                   verbose: bool = False) -> gpd.GeoDataFrame:
     # make sure both GDFs are projected into the same crs
     if verbose:
         print('Projecting maps...')
@@ -155,6 +156,7 @@ def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFram
 def add_numpy_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf['np_geometry'] = gdf.apply(lambda row: np.array((row['geometry'].centroid.x, row['geometry'].centroid.y)),
                                    axis=1)
+    gdf.insert(0, 'row_num', range(len(gdf)))
 
     return gdf
 
@@ -169,6 +171,18 @@ def main():
     nc_map = make_pixel_map(nc_votes, nc_pop, .1, verbose=True)
     nc_map = add_numpy_geometry(nc_map)
     nc_map.to_pickle('full_map.pickle')
+
+
+def test():
+    nc_votes = gpd.read_file('./nc_data/voters_shapefile/NC_G18.shp')
+    nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
+        columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
+
+    nc_pop = gpd.read_file('./nc_data/population.geojson')
+
+    nc_map = make_pixel_map(nc_votes, nc_pop, 1, verbose=True)
+    nc_map = add_numpy_geometry(nc_map)
+    nc_map.to_pickle('test_map.pickle')
 
 
 if __name__ == '__main__':
