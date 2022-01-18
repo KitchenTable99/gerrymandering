@@ -1,13 +1,18 @@
 # this file will merge ACS and TIGER data to create the location-based population file
+import glob
 import os
 import sys
-import requests
-import glob
-import pandas as pd
 from zipfile import ZipFile
-import geopandas as gpd
 
-API_KEY = 'ce766d0c0c87a250b8ea638692c417d1b7094fc3'
+import geopandas as gpd
+import pandas as pd
+import requests
+
+with open('census_api_key_secret.txt', 'r') as fp:
+    API_KEY = fp.read()[:-1]
+
+CENSUS_COLUMN = 'P1_001N'
+
 STATE_DICT = {'Alabama': 1, 'Alaska': 2, 'Arizona': 4, 'Arkansas': 5, 'California': 6, 'Colorado': 8, 'Connecticut': 9,
               'Delaware': 10, 'District of Columbia': 11, 'Idaho': 16, 'Florida': 12, 'Georgia': 13, 'Hawaii': 15,
               'Illinois': 17, 'Indiana': 18, 'Iowa': 19, 'Kansas': 20, 'Kentucky': 21, 'Louisiana': 22, 'Maine': 23,
@@ -22,15 +27,20 @@ STATE_DICT = {'Alabama': 1, 'Alaska': 2, 'Arizona': 4, 'Arkansas': 5, 'Californi
 def usage_statement() -> None:
     """This just prints the usage statement and exits."""
     print('\nUSAGE STATEMENT:')
-    print(f'python3 {sys.argv[0]} [SHAPEFILE] [ACS FILE]')
-    print('\n\nThis file takes in a TIGER shapefile as well as a CSV file downloaded from socialexplorer.com and writes'
-          ' a geojson file to the current working directory.')
+    print(f'python3 {sys.argv[0]} [STATE NAME]')
+    print('\n\nThis file takes in the name of a United State and processes it to get its population data at the census'
+          'block level. The name of the state must be title cased (e.g. North Carolina, California). '
+          'It writes this data to a geojson file to the current working directory.')
     sys.exit()
 
 
 def get_census(state_id: int) -> pd.DataFrame:
+    """
+    :param state_id: the number of the state according to the Census Bureau classification.
+    :return: a DataFrame containing the population data and the GeoID of the passed state
+    """
     url = f'https://api.census.gov/data/2020/dec/pl?' \
-          f'get=P3_001N,GEO_ID&for=block:*&in=state:{state_id}&in=county:*&in=tract:*&key={API_KEY}'
+          f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id}&in=county:*&in=tract:*&key={API_KEY}'
 
     response = requests.get(url)
     response_json = response.json()
@@ -57,7 +67,7 @@ def main():
     population_df = get_census(state_num)
     # clean up population data
     population_df['geo_id'] = population_df.apply(lambda row: row.GEO_ID.split('US')[-1], axis=1)
-    population_df = population_df[['geo_id', 'P3_001N']]
+    population_df = population_df[['geo_id', CENSUS_COLUMN]]
 
     # TIGER
     print('Unzipping shapefile data...')
@@ -74,7 +84,8 @@ def main():
     # merge and clean
     print('Merging and saving data...')
     merged = tiger_df.merge(population_df, on='geo_id')
-    merged.rename(columns={'P3_001N': 'population'}, inplace=True)
+    merged.rename(columns={CENSUS_COLUMN: 'population'}, inplace=True)
+    merged = merged.astype({'population': int})
 
     # save file
     merged.to_file(f'{state.lower().replace(" ", "_")}_population.geojson', driver='GeoJSON')
