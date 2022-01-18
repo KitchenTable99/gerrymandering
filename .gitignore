@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*secret*
 
 *.DS_Store
 *.prof
@@ -9,6 +10,8 @@ __pycache__/
 *.pickle
 .idea/
 img/
+data/
+*log*
 .jovianrc
 
 # C extensions
