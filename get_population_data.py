@@ -23,6 +23,17 @@ STATE_DICT = {'Alabama': 1, 'Alaska': 2, 'Arizona': 4, 'Arkansas': 5, 'Californi
               'Texas': 48, 'Utah': 49, 'Vermont': 50, 'Virginia': 51, 'Washington': 53, 'West Virginia': 54,
               'Wisconsin': 55, 'Wyoming': 56, 'Puerto Rico': 72}
 
+STATE_ABBREV = {'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
+                'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'District of Columbia': 'DC', 'Florida': 'FL',
+                'Georgia': 'GA', 'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
+                'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
+                'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
+                'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
+                'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
+                'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
+                'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT', 'Virginia': 'VA',
+                'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'}
+
 
 def usage_statement() -> None:
     """This just prints the usage statement and exits."""
@@ -88,7 +99,8 @@ def main():
     merged = merged.astype({'population': int})
 
     # save file
-    merged.to_file(f'{state.lower().replace(" ", "_")}_population.geojson', driver='GeoJSON')
+    save_path = f'./data/population/{STATE_ABBREV.get(state).lower()}.geojson'
+    merged.to_file(save_path, driver='GeoJSON')
 
     # delete all the tiger stuff
     tiger_glob = glob.glob(f'{tiger_template}.*')
