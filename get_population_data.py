@@ -3,6 +3,7 @@ import glob
 import os
 import sys
 from zipfile import ZipFile
+from tqdm import tqdm as progress
 
 import geopandas as gpd
 import pandas as pd
@@ -14,14 +15,14 @@ with open('census_api_key_secret.txt', 'r') as fp:
 CENSUS_COLUMN = 'P1_001N'
 
 STATE_DICT = {'Alabama': 1, 'Alaska': 2, 'Arizona': 4, 'Arkansas': 5, 'California': 6, 'Colorado': 8, 'Connecticut': 9,
-              'Delaware': 10, 'District of Columbia': 11, 'Idaho': 16, 'Florida': 12, 'Georgia': 13, 'Hawaii': 15,
-              'Illinois': 17, 'Indiana': 18, 'Iowa': 19, 'Kansas': 20, 'Kentucky': 21, 'Louisiana': 22, 'Maine': 23,
-              'Maryland': 24, 'Massachusetts': 25, 'Michigan': 26, 'Minnesota': 27, 'Mississippi': 28, 'Missouri': 29,
+              'Delaware': 10, 'Idaho': 16, 'Florida': 12, 'Georgia': 13, 'Hawaii': 15, 'Illinois': 17, 'Indiana': 18,
+              'Iowa': 19, 'Kansas': 20, 'Kentucky': 21, 'Louisiana': 22, 'Maine': 23, 'Maryland': 24,
+              'Massachusetts': 25, 'Michigan': 26, 'Minnesota': 27, 'Mississippi': 28, 'Missouri': 29,
               'Montana': 30, 'Nebraska': 31, 'Nevada': 32, 'New Hampshire': 33, 'New Jersey': 34, 'New Mexico': 35,
               'New York': 36, 'North Carolina': 37, 'North Dakota': 38, 'Ohio': 39, 'Oklahoma': 40, 'Oregon': 41,
               'Pennsylvania': 42, 'Rhode Island': 44, 'South Carolina': 45, 'South Dakota': 46, 'Tennessee': 47,
               'Texas': 48, 'Utah': 49, 'Vermont': 50, 'Virginia': 51, 'Washington': 53, 'West Virginia': 54,
-              'Wisconsin': 55, 'Wyoming': 56, 'Puerto Rico': 72}
+              'Wisconsin': 55, 'Wyoming': 56}
 
 STATE_ABBREV = {'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
                 'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'District of Columbia': 'DC', 'Florida': 'FL',
@@ -51,7 +52,7 @@ def get_census(state_id: int) -> pd.DataFrame:
     :return: a DataFrame containing the population data and the GeoID of the passed state
     """
     url = f'https://api.census.gov/data/2020/dec/pl?' \
-          f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id}&in=county:*&in=tract:*&key={API_KEY}'
+          f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={API_KEY}'
 
     response = requests.get(url)
     response_json = response.json()
@@ -61,7 +62,6 @@ def get_census(state_id: int) -> pd.DataFrame:
 
 def main():
     # get the input files
-    # must be according to usage statement
     state_num = None
     state = None
     try:
@@ -73,27 +73,40 @@ def main():
     if not state_num:
         usage_statement()
 
+    driver(state, state_num)
+
+
+def get_all_pop():
+    for state, state_num in progress(STATE_DICT.items()):
+        driver(state, state_num, verbose=False)
+
+
+def driver(state: str, state_num: int, verbose: bool = True):
     # population
-    print(f'Getting {state} population data...')
+    if verbose:
+        print(f'Getting {state} population data...')
     population_df = get_census(state_num)
     # clean up population data
     population_df['geo_id'] = population_df.apply(lambda row: row.GEO_ID.split('US')[-1], axis=1)
     population_df = population_df[['geo_id', CENSUS_COLUMN]]
 
     # TIGER
-    print('Unzipping shapefile data...')
+    if verbose:
+        print('Unzipping shapefile data...')
     tiger_template = f'tl_2021_{state_num:02}_tabblock20'
     tiger_zip = f'./data/tiger_shapefiles/{tiger_template}.zip'
     with ZipFile(tiger_zip, 'r') as zip_:
         zip_.extractall()
-    print('Reading shapefile data...')
+    if verbose:
+        print('Reading shapefile data...')
     tiger_df = gpd.read_file(tiger_template + '.shp')
     # clean up TIGER data
     tiger_df = tiger_df[['GEOID20', 'geometry']]
     tiger_df.rename(columns={'GEOID20': 'geo_id'}, inplace=True)
 
     # merge and clean
-    print('Merging and saving data...')
+    if verbose:
+        print('Merging and saving data...')
     merged = tiger_df.merge(population_df, on='geo_id')
     merged.rename(columns={CENSUS_COLUMN: 'population'}, inplace=True)
     merged = merged.astype({'population': int})
@@ -109,4 +122,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    get_all_pop()
+    # main()
