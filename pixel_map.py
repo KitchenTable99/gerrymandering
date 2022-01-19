@@ -270,17 +270,29 @@ def main():
 
 def test():
     # TODO: add loss of population, votes, and places with zero people
-    nc_votes = gpd.read_file('./nc_data/voters_shapefile/NC_G18.shp')
+    nc_votes = gpd.read_file('./data/nc/voters_shapefile/NC_G18.shp')
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
-    nc_pop = gpd.read_file('north_carolina_population.geojson')
+    nc_pop = gpd.read_file('./data/nc/population.geojson')
 
     nc_map = make_pixel_map(nc_votes, nc_pop, 3000, verbose=True)
     nc_map = add_numpy_geometry(nc_map)
     nc_map.to_pickle('test_map.pickle')
 
 
+def test_pa():
+    pa_votes = gpd.read_file('./data/pa/voters_shapefile/PA2018.shp')
+    pa_votes = pa_votes[['G18DemSen', 'G18RepSen', 'geometry']].rename(
+        columns={'G18DemSen': 'blue_votes', 'G18RepSen': 'red_votes'})
+
+    pa_pop = gpd.read_file('./data/pa/population.geojson')
+
+    pa_map = make_pixel_map(pa_votes, pa_pop, 3000, verbose=True)
+    pa_map = add_numpy_geometry(pa_map)
+    pa_map.to_pickle('test_map_pa.pickle')
+
+
 if __name__ == '__main__':
     # main()
-    test()
+    test_pa()
