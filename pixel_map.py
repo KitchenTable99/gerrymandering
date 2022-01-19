@@ -11,7 +11,7 @@ from shapely.geometry import Polygon
 
 
 class print_colors:
-    RED = '\033[95m'
+    RED = '\033[91m'
     GREEN = '\033[92m'
     BOLD = '\033[1m'
     NORMAL = '\033[0m'
@@ -107,7 +107,7 @@ def determine_true_square_len(bounds: Bounds, resolution: int, map_: gpd.GeoData
 
         if (resolution - tolerance) <= actual_num <= (resolution + tolerance):
             if verbose:
-                print(f'Succeeded using {target}')
+                print(f'Succeeded using {target} ({actual_num})')
             return get_square_len(bounds, target)
         elif actual_num < (resolution - tolerance):
             lower = target + 1
@@ -256,20 +256,26 @@ def add_numpy_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def main():
-    nc_votes = gpd.read_file('./nc_data/voters_shapefile/NC_G18.shp')
+    nc_votes = gpd.read_file('./data/nc/voters_shapefile/NC_G18.shp')
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
 
-    nc_pop = gpd.read_file('./nc_data/population.geojson')
+    nc_pop = gpd.read_file('./data/nc/population.geojson')
 
-    nc_map = make_pixel_map(nc_votes, nc_pop, 53_900, verbose=True)
-    print(f'Kept {len(nc_map)} squares...')
+    nc_map = make_pixel_map(nc_votes, nc_pop, 30_000, verbose=True)
     nc_map = add_numpy_geometry(nc_map)
+
+    # print losses
+    print(f'{print_colors.RED}Losses:')
+    pop_loss = abs(sum(nc_pop.population) - sum(nc_map.population))
+    red_loss = abs(sum(nc_votes.red_votes) - sum(nc_map.red_votes))
+    blue_loss = abs(sum(nc_votes.blue_votes) - sum(nc_map.blue_votes))
+    print(f'{pop_loss} people\n{red_loss} Republican votes\n{blue_loss} Democratic votes')
+
     nc_map.to_pickle('full_map.pickle')
 
 
 def test():
-    # TODO: add loss of population, votes, and places with zero people
     nc_votes = gpd.read_file('./data/nc/voters_shapefile/NC_G18.shp')
     nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
         columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
@@ -278,6 +284,14 @@ def test():
 
     nc_map = make_pixel_map(nc_votes, nc_pop, 3000, verbose=True)
     nc_map = add_numpy_geometry(nc_map)
+
+    # print losses
+    print(f'{print_colors.RED}Losses:')
+    pop_loss = abs(sum(nc_pop.population) - sum(nc_map.population))
+    red_loss = abs(sum(nc_votes.red_votes) - sum(nc_map.red_votes))
+    blue_loss = abs(sum(nc_votes.blue_votes) - sum(nc_map.blue_votes))
+    print(f'{pop_loss} people\n{red_loss} Republican votes\n{blue_loss} Democratic votes')
+
     nc_map.to_pickle('test_map.pickle')
 
 
@@ -294,5 +308,5 @@ def test_pa():
 
 
 if __name__ == '__main__':
-    # main()
-    test_pa()
+    main()
+    # test()
