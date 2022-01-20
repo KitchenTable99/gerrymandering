@@ -68,7 +68,6 @@ def weighted_intersection(gdf1: gpd.GeoDataFrame, gdf2: gpd.GeoDataFrame, attr_s
     inter['gdf2_area'] = inter.apply(lambda r: gdf2.at[r['gdf2_num'], 'area'], axis=1)
     # this gets the area of the gdf2 polygon that the smaller inter polygon came from
     inter['prop ' + attr_str] = (inter['inter_area'] / inter['gdf2_area']) * inter[attr_str]
-    inter.to_pickle('inter.pickle')
     inter = inter[['square_num', 'prop ' + attr_str]]
 
     # group all the smaller inter polygons by square and put them back in the original GeoDataFrame via sum aggregation
