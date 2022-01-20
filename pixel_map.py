@@ -1,4 +1,5 @@
 # this file contains code needed to create a pixel map GeoDataFrame
+import argparse
 import glob
 import os
 import sys
@@ -18,6 +19,12 @@ class print_colors:
     GREEN = '\033[92m'
     BOLD = '\033[1m'
     NORMAL = '\033[0m'
+
+
+STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
+                'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
+                'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy',
+                'all'}
 
 
 @dataclass
@@ -258,27 +265,7 @@ def add_numpy_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
-def test():
-    nc_votes = gpd.read_file('./data/nc/voters_shapefile/NC_G18.shp')
-    nc_votes = nc_votes[['G18DStSEN', 'G18RStSEN', 'geometry']].rename(
-        columns={'G18DStSEN': 'blue_votes', 'G18RStSEN': 'red_votes'})
-
-    nc_pop = gpd.read_file('./data/nc/population.geojson')
-
-    nc_map = make_pixel_map(nc_votes, nc_pop, 30_000, verbose=True)
-    nc_map = add_numpy_geometry(nc_map)
-
-    # print losses
-    print(f'{print_colors.RED}Losses:')
-    pop_loss = abs(sum(nc_pop.population) - sum(nc_map.population))
-    red_loss = abs(sum(nc_votes.red_votes) - sum(nc_map.red_votes))
-    blue_loss = abs(sum(nc_votes.blue_votes) - sum(nc_map.blue_votes))
-    print(f'{pop_loss} people\n{red_loss} Republican votes\n{blue_loss} Democratic votes')
-
-    nc_map.to_pickle('full_map.pickle')
-
-
-def main(state: str, res: int):
+def driver(state: str, res: int):
     # get voting data
     with ZipFile(f'./data/dataverse_files/{state}_2020.zip', 'r') as zip_:
         zip_.extractall()
@@ -307,34 +294,27 @@ def main(state: str, res: int):
     pixel_map.to_pickle(path)
 
 
-def test_pa():
-    pa_votes = gpd.read_file('./data/pa/voters_shapefile/PA2018.shp')
-    pa_votes = pa_votes[['G18DemSen', 'G18RepSen', 'geometry']].rename(
-        columns={'G18DemSen': 'blue_votes', 'G18RepSen': 'red_votes'})
+def get_cmd_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='This program creates a pixel map of the passed state. Testing will '
+                                                 'create a map with around 3_000 pixels (maximum difference of 250) '
+                                                 'and no testing will create a map around 30_000 (maximum difference '
+                                                 'of 250).')
+    parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to create maps. If all is '
+                                                                      'passed, all 50 states will be queried')
+    parser.add_argument('--testing', '-t', action='store_true', help='Create testing maps')
 
-    pa_pop = gpd.read_file('./data/pa/population.geojson')
-
-    pa_map = make_pixel_map(pa_votes, pa_pop, 3000, verbose=True)
-    pa_map = add_numpy_geometry(pa_map)
-    pa_map.to_pickle('test_map_pa.pickle')
+    return parser.parse_args()
 
 
-def usage_statement():
-    """This prints the usage statement and exits."""
-    print('\nUSAGE STATEMENT:')
-    print(f'python3 {sys.argv[0]} [STATE NAME] [TESTING]')
-    print('\n\nThis file takes in the name of a United State and whether or not to run the testing mode'
-          'block level. The name of the state must be a lower-cased, two-letter abbreviation (e.g. nc, ca). '
-          'It writes this data to a geojson file to the current working directory.')
-    sys.exit()
+def main():
+    cmd_args = get_cmd_args()
+    if cmd_args.state == 'all':
+        raise NotImplementedError
+
+    res = 3_000 if cmd_args.testing else 30_000
+    print(f'Preparing {cmd_args.state.upper()}...')
+    driver(cmd_args.state, res)
 
 
 if __name__ == '__main__':
-    try:
-        _, state, testing = sys.argv
-        res = 3_000 if testing == 'test' or testing == 'testing' or testing == '-t' else 30_000
-    except Exception:
-        usage_statement()
-
-    main(state, res)
-    # test(sys.argv[1])
+    main()

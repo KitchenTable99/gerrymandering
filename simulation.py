@@ -1,7 +1,7 @@
 # the code for the Pixel and PixelMap classes
+import argparse
 import pickle
 import random
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Generator
 
@@ -13,6 +13,12 @@ from tqdm import tqdm as progress
 
 from districts import District
 from scorers import WeightValues, WeightDict
+
+
+STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
+                'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
+                'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy',
+                'all'}
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -44,6 +50,8 @@ class GerrymanderingSimulation:
     borders: Dict[int, int] = field(default_factory=dict)
     districts: List[District] = field(default_factory=list)
 
+    logging: bool = False
+
     weight_dict: Optional[WeightDict] = None
     weights: Optional[WeightValues] = None
     score: float = -1.
@@ -51,9 +59,9 @@ class GerrymanderingSimulation:
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
     def __post_init__(self):
-        self.weight_dict = WeightDict(WeightValues(3, np.array((100, 100, 1)), .5),
-                                      WeightValues(1, np.array((30, 30, 30)), .75),
-                                      WeightValues(3, np.array((3, 5, 5)), .5))
+        self.weight_dict = WeightDict(WeightValues(3, np.array((10_000_000, 50, 1)), .5),
+                                      WeightValues(1, np.array((30, -30, 30)), .75),
+                                      WeightValues(3, np.array((3, 5, 5_000)), .5))
 
     def set_centering_weights(self) -> None:
         self.weights = self.weight_dict.centering
@@ -82,6 +90,9 @@ class GerrymanderingSimulation:
         assignments = np.argmin(distances, axis=1)
         # assign each pixel to the appropriate class
         self.map['district'] = assignments
+
+        if self.logging:
+            self.map.to_pickle('log.pickle')
 
     def initialize_districts(self, verbose: bool = False) -> None:
         """This function initializes the districts by tessellating the map, finding the borders,
@@ -145,7 +156,6 @@ class GerrymanderingSimulation:
            :return the score represented by a float
         """
         # make sure that there are desired results before scoring
-        # TODO: put this in a better place
         if np.sum(self.desired_results) == 0:
             raise Exception('You need to specify election results before running the simulation')
         # see if method should score the internal districts
@@ -193,10 +203,7 @@ class GerrymanderingSimulation:
 
         # make sure all pairs can reach each other
         for class_num, neighbor_list in class_to_neighbor_dict.items():
-            # only bother if there are at least two neighbors
             # TODO: perform multi-stage BFS so that we don't search the huge chunk to completion
-            if len(neighbor_list) < 2:
-                continue
 
             # perform a BFS
             start = neighbor_list.pop()
@@ -226,10 +233,10 @@ class GerrymanderingSimulation:
 
         return False
 
-    def eliminate_district(self, remove_pixel: int) -> bool:
+    def eliminate_district(self,  remove_pixel: int) -> bool:
         """If the passed pixel is the last in its class, this function will return True
 
-           :param remove_pixel: the square_num of the pixel to test
+           :param remove_pixel: the district from which the pixel will be removed
 
            :return whether or not the pixel is the last in the district
         """
@@ -305,6 +312,15 @@ class GerrymanderingSimulation:
             s_district.deviation = old_s_deviation
             return
 
+        # this change was accepted--log the change
+        if self.logging:
+            to_append = str(first)
+            to_append += ','
+            to_append += str(s_class)
+            to_append += '\n'
+            with open('log_changes.csv', 'a') as fp:
+                fp.write(to_append)
+
         # update the score, district objects, pixel classification
         self.score = new_score
         self.map.at[first, 'district'] = self.map.at[second, 'district']
@@ -354,49 +370,56 @@ class GerrymanderingSimulation:
         plt.show()
 
 
-def test():
-    with open('test_map.pickle', 'rb') as fp:
+def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging: bool, show_after: bool) -> None:
+    pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
+    with open(pickle_path, 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
-    sim = GerrymanderingSimulation(pixel_map, 13)
-
+    sim = GerrymanderingSimulation(pixel_map, num_districts, logging=logging)
     sim.set_desired_results(np.repeat(.6, 13))
-    sim.initialize_districts(verbose=True)
-    import cProfile
-    import pstats
+    sim.initialize_districts(verbose=verbose)
+    # TODO: update this with tuned hyper-parameters
+    sim.gerrymander(50_000, 20_000, 50_000)
 
-    with cProfile.Profile() as pr:
-        sim.gerrymander(10_000, 5000, 10_000)
+    if show_after:
+        sim.show_districts()
 
-    stats = pstats.Stats(pr)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.dump_stats(filename='profile.prof')
 
-    # sim.show_districts()
+def get_cmd_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='This program runs a simulation for a passed state. All can be passed '
+                                                 'to run every state.')
+    parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state to simulate. If all is '
+                                                                      'passed, all 50 states will be simulated.')
+    parser.add_argument('num_districts', type=int, help='The number of districts to carve the map into.')
+    parser.add_argument('--testing', '-t', action='store_true', help='Simulate testing maps')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Print out debug information')
+    parser.add_argument('--logging', action='store_true', help='Log individual pixel swaps')
+    parser.add_argument('--profile', action='store_true', help='Profile the simulation')
+    parser.add_argument('--show', action='store_true', help='Show the map at the end of the simulation')
+
+    return parser.parse_args()
 
 
 def main():
-    # with open('full_map.pickle', 'rb') as fp:
-    #     pixel_map: gpd.GeoDataFrame = pickle.load(fp)
-    #
-    # sim = GerrymanderingSimulation(pixel_map, 13)
-    # sim.set_desired_results(np.repeat(.6, 13))
-    # sim.initialize_districts(verbose=True)
+    cmd_args = get_cmd_args()
+    if cmd_args.state == 'all':
+        raise NotImplementedError
 
-    with open('full_initial.pickle', 'rb') as fp:
-        sim = pickle.load(fp)
+    if cmd_args.profile:
+        import cProfile
+        import pstats
 
-    import cProfile
-    import pstats
+        with cProfile.Profile() as pr:
+            driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
+                   cmd_args.show)
 
-    with cProfile.Profile() as pr:
-        sim.gerrymander(1000, 0, 0)
-
-    stats = pstats.Stats(pr)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.dump_stats(filename='profile.prof')
+        stats = pstats.Stats(pr)
+        stats.sort_stats(pstats.SortKey.TIME)
+        stats.dump_stats(filename='profile.prof')
+    else:
+        driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
+               cmd_args.show)
 
 
 if __name__ == '__main__':
-    # main()
-    test()
+    main()

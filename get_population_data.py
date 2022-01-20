@@ -1,7 +1,7 @@
 # this file will merge ACS and TIGER data to create the location-based population file
+import argparse
 import glob
 import os
-import sys
 from zipfile import ZipFile
 from tqdm import tqdm as progress
 
@@ -14,36 +14,26 @@ with open('census_api_key_secret.txt', 'r') as fp:
 
 CENSUS_COLUMN = 'P1_001N'
 
-STATE_DICT = {'Alabama': 1, 'Alaska': 2, 'Arizona': 4, 'Arkansas': 5, 'California': 6, 'Colorado': 8, 'Connecticut': 9,
-              'Delaware': 10, 'Idaho': 16, 'Florida': 12, 'Georgia': 13, 'Hawaii': 15, 'Illinois': 17, 'Indiana': 18,
-              'Iowa': 19, 'Kansas': 20, 'Kentucky': 21, 'Louisiana': 22, 'Maine': 23, 'Maryland': 24,
-              'Massachusetts': 25, 'Michigan': 26, 'Minnesota': 27, 'Mississippi': 28, 'Missouri': 29,
-              'Montana': 30, 'Nebraska': 31, 'Nevada': 32, 'New Hampshire': 33, 'New Jersey': 34, 'New Mexico': 35,
-              'New York': 36, 'North Carolina': 37, 'North Dakota': 38, 'Ohio': 39, 'Oklahoma': 40, 'Oregon': 41,
-              'Pennsylvania': 42, 'Rhode Island': 44, 'South Carolina': 45, 'South Dakota': 46, 'Tennessee': 47,
-              'Texas': 48, 'Utah': 49, 'Vermont': 50, 'Virginia': 51, 'Washington': 53, 'West Virginia': 54,
-              'Wisconsin': 55, 'Wyoming': 56}
+STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
+                'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
+                'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy',
+                'all'}
 
-STATE_ABBREV = {'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
-                'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'District of Columbia': 'DC', 'Florida': 'FL',
-                'Georgia': 'GA', 'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
-                'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
-                'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
-                'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
-                'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
-                'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
-                'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT', 'Virginia': 'VA',
-                'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'}
+STATE_DICT = {'al': 1, 'ak': 2, 'az': 4, 'ar': 5, 'ca': 6, 'co': 8, 'ct': 9, 'de': 10, 'id': 16, 'fl': 12, 'ga': 13,
+              'hi': 15, 'il': 17, 'in': 18, 'ia': 19, 'ks': 20, 'ky': 21, 'la': 22, 'me': 23, 'md': 24, 'ma': 25,
+              'mi': 26, 'mn': 27, 'ms': 28, 'mo': 29, 'mt': 30, 'ne': 31, 'nv': 32, 'nh': 33, 'nj': 34, 'nm': 35,
+              'ny': 36, 'nc': 37, 'nd': 38, 'oh': 39, 'ok': 40, 'or': 41, 'pa': 42, 'ri': 44, 'sc': 45, 'sd': 46,
+              'tn': 47, 'tx': 48, 'ut': 49, 'vt': 50, 'va': 51, 'wa': 53, 'wv': 54, 'wi': 55, 'wy': 56}
 
 
-def usage_statement() -> None:
-    """This just prints the usage statement and exits."""
-    print('\nUSAGE STATEMENT:')
-    print(f'python3 {sys.argv[0]} [STATE NAME]')
-    print('\n\nThis file takes in the name of a United State and processes it to get its population data at the census'
-          'block level. The name of the state must be title cased (e.g. North Carolina, California). '
-          'It writes this data to a geojson file to the current working directory.')
-    sys.exit()
+def get_cmd_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Retrieve population data from the Census Bureau at the block level '
+                                                 'and joins it with shapefile data contained within the data '
+                                                 'directory.')
+    parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to get data. If all is '
+                                                                      'passed, all 50 states will be queried')
+
+    return parser.parse_args()
 
 
 def get_census(state_id: int) -> pd.DataFrame:
@@ -61,19 +51,13 @@ def get_census(state_id: int) -> pd.DataFrame:
 
 
 def main():
-    # get the input files
-    state_num = None
-    state = None
-    try:
-        state = ' '.join(sys.argv[1:])
-        state_num = STATE_DICT.get(state, None)
-    except IndexError:
-        usage_statement()
+    cmd_args = get_cmd_args()
 
-    if not state_num:
-        usage_statement()
-
-    driver(state, state_num)
+    if cmd_args.state == 'all':
+        get_all_pop()
+    else:
+        state_num = STATE_DICT.get(cmd_args.state)
+        driver(cmd_args.state, state_num)
 
 
 def get_all_pop():
@@ -84,7 +68,7 @@ def get_all_pop():
 def driver(state: str, state_num: int, verbose: bool = True):
     # population
     if verbose:
-        print(f'Getting {state} population data...')
+        print(f'Getting {state.upper()} population data...')
     population_df = get_census(state_num)
     # clean up population data
     population_df['geo_id'] = population_df.apply(lambda row: row.GEO_ID.split('US')[-1], axis=1)
@@ -112,7 +96,7 @@ def driver(state: str, state_num: int, verbose: bool = True):
     merged = merged.astype({'population': int})
 
     # save file
-    save_path = f'./data/population/{STATE_ABBREV.get(state).lower()}.geojson'
+    save_path = f'./data/population/{state}.geojson'
     merged.to_file(save_path, driver='GeoJSON')
 
     # delete all the tiger stuff
@@ -122,5 +106,4 @@ def driver(state: str, state_num: int, verbose: bool = True):
 
 
 if __name__ == '__main__':
-    get_all_pop()
-    # main()
+    main()

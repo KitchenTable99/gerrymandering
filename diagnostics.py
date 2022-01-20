@@ -1,4 +1,5 @@
 # This file contains diagnostics for PixelMaps
+import argparse
 import pickle
 import sys
 
@@ -6,19 +7,12 @@ import matplotlib.pyplot as plt
 
 
 # TODO: figure out diagnostics for the completed map
+STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
+                'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
+                'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy'}
 
 
-def usage_statement():
-    """This prints the usage statement and exits."""
-    print('\nUSAGE STATEMENT:')
-    print(f'python3 {sys.argv[0]} [STATE NAME] [TESTING]')
-    print('\n\nThis file takes in the name of a United State and whether or not to run the testing mode'
-          'block level. The name of the state must be a lower-cased, two-letter abbreviation (e.g. nc, ca). '
-          'It writes this data to a geojson file to the current working directory.')
-    sys.exit()
-
-
-def main(state: str, testing: bool):
+def driver(state: str, testing: bool):
     pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map = pickle.load(fp)
@@ -50,11 +44,20 @@ def main(state: str, testing: bool):
     # TODO: implement loss statistics
 
 
-if __name__ == '__main__':
-    try:
-        _, state, testing = sys.argv
-        test = True if testing == 'test' or testing == 'testing' or testing == '-t' else False
-    except Exception:
-        usage_statement()
+def get_cmd_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='This program investigates a state\'s map. If testing is passed, the '
+                                                 'testing map will be investigated.')
+    parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to check diagnostics.')
+    parser.add_argument('--testing', '-t', action='store_true', help='Diagnose testing maps')
 
-    main(state, test)
+    return parser.parse_args()
+
+
+def main():
+    cmd_args = get_cmd_args()
+    print(f'Reading {cmd_args.state.upper()}...')
+    driver(cmd_args.state, cmd_args.testing)
+
+
+if __name__ == '__main__':
+    main()
