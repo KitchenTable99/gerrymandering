@@ -8,6 +8,7 @@ from typing import List, Dict, Tuple, Optional, Generator
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.spatial import distance
 from tqdm import tqdm as progress
 
@@ -55,10 +56,15 @@ class GerrymanderingSimulation:
     weight_dict: Optional[WeightDict] = None
     weights: Optional[WeightValues] = None
     score: float = -1.
-    start_score: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
     desired_results: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
 
     def __post_init__(self):
+        pixels = self.map.index.to_numpy()
+        rows = self.map['row_num'].to_numpy()
+        if self.logging:
+            with open('log_changes.csv', 'w') as fp:
+                fp.write('square_num,switch_district\n')
+        self.pixel_to_row = {p: r for p, r in zip(pixels, rows)}
         self.weight_dict = WeightDict(WeightValues(3, np.array((10_000_000, 50, 1)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
@@ -111,8 +117,6 @@ class GerrymanderingSimulation:
         neighbors_arr = self.map['neighbors'].to_numpy()
         district_arr = self.map['district'].to_numpy()
         squares = self.map.index.to_numpy()
-        rows = self.map['row_num'].to_numpy()
-        square_to_row = {s: r for s, r in zip(squares, rows)}
         borders = {}
         for row_num, square_num in enumerate(squares):
             if verbose:
@@ -120,7 +124,7 @@ class GerrymanderingSimulation:
             neighbors = neighbors_arr[row_num]
             focus_class = district_arr[row_num]
 
-            neighbor_classes = [district_arr[square_to_row[neighbor]] for neighbor in neighbors]
+            neighbor_classes = [district_arr[self.pixel_to_row[neighbor]] for neighbor in neighbors]
             different_classes = [n_class != focus_class for n_class in neighbor_classes]
             borders[square_num] = sum(different_classes)
 
@@ -176,11 +180,6 @@ class GerrymanderingSimulation:
         least_squares = np.sum(np.square(np.diff(self.desired_results - sorted_results)))
         scoring[2] = least_squares
 
-        if starting:
-            self.start_score = scoring
-        else:
-            scoring /= self.start_score
-
         return self.weights.scoring_weights.T @ scoring
 
     def district_breaks(self, first: int, second: int) -> bool:
@@ -202,6 +201,8 @@ class GerrymanderingSimulation:
                 class_to_neighbor_dict.get(neighbor_class).append(neighbor)
 
         # make sure all pairs can reach each other
+        neighbors = self.map['neighbors'].to_numpy()
+        districts = self.map['district'].to_numpy()
         for class_num, neighbor_list in class_to_neighbor_dict.items():
             # TODO: perform multi-stage BFS so that we don't search the huge chunk to completion
 
@@ -216,13 +217,13 @@ class GerrymanderingSimulation:
                     if not neighbor_list:
                         break
 
-                focus_neighbors = self.map.at[focus, 'neighbors']
+                focus_neighbors = neighbors[self.pixel_to_row[focus]]
                 for focus_neighbor in focus_neighbors:
                     # only visit the node if the node hasn't been visited, is in the correct class, and isn't the
                     # origin node
                     if (
                             focus_neighbor not in visited and
-                            self.map.at[focus_neighbor, 'district'] == class_num and
+                            districts[self.pixel_to_row[focus_neighbor]] == class_num and
                             focus_neighbor != first
                     ):
                         visited.append(focus_neighbor)
@@ -233,17 +234,8 @@ class GerrymanderingSimulation:
 
         return False
 
-    def eliminate_district(self,  remove_pixel: int) -> bool:
-        """If the passed pixel is the last in its class, this function will return True
-
-           :param remove_pixel: the district from which the pixel will be removed
-
-           :return whether or not the pixel is the last in the district
-        """
-        remove_pop = self.map.at[remove_pixel, 'population']
-        remove_class = self.map.at[remove_pixel, 'district']
-
-        return self.districts[remove_class].population - remove_pop <= 0
+    def eliminate_district(self,  remove_class: int) -> bool:
+        return len(self.districts[remove_class].pixel_rows) <= 1
 
     def pick_swap_pair(self) -> Tuple[int, int]:
         """This function picks the pixel to switch.
@@ -265,7 +257,7 @@ class GerrymanderingSimulation:
                 second_class = self.map.at[neighbor, 'district']
                 if second_class == first_class or \
                         self.district_breaks(first_pixel, neighbor) or \
-                        self.eliminate_district(first_pixel):
+                        self.eliminate_district(first_class):
                     continue
                 second_pixel = neighbor
                 break
@@ -379,7 +371,10 @@ def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging
     sim.set_desired_results(np.repeat(.6, 13))
     sim.initialize_districts(verbose=verbose)
     # TODO: update this with tuned hyper-parameters
-    sim.gerrymander(50_000, 20_000, 50_000)
+    sim.gerrymander(120_000, 50_000, 120_000)
+
+    sim.map.to_pickle('simulation_out.pickle')
+    print(f'There were {len(pd.unique(sim.map["district"]))} districts')
 
     if show_after:
         sim.show_districts()

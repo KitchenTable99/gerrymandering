@@ -1,15 +1,55 @@
 # the code to visualize map change
-from typing import List
+from typing import List, Tuple
 
 import geopandas as gpd
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, field
 import pickle
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.animation import FuncAnimation
-
+with open('log.pickle', 'rb') as fp:
+    MAP = pickle.load(fp)
+LOGS = pd.read_csv('log_changes.csv')
 from districts import District
 from simulation import GerrymanderingSimulation
+Switch = Tuple[int, int]  # the first int is the square_num, the second is the class it switched from
+
+
+@dataclass(unsafe_hash=True)
+class LoggingMapAnimator:
+
+    switches: List[Switch] = field(default_factory=list)
+    switches_done: int = 0
+
+    def move_forward(self, map_: gpd.GeoDataFrame, logs: pd.DataFrame, switch_num: int) -> None:
+        to_switch = logs.iloc[switch_num]
+        current_district = map_.at[to_switch.square_num, 'district']
+        map_.at[to_switch.square_num, 'district'] = to_switch.switch_district
+        switch = (to_switch.square_num, current_district)
+        self.switches.append(switch)
+
+    def move_backward(self, map_: gpd.GeoDataFrame) -> None:
+        if self.switches:
+            to_switch = self.switches.pop()
+            map_.at[to_switch[0], 'district'] = to_switch[1]
+
+    def on_press(self, event) -> None:
+        if event.key == 'j':
+            self.move_forward(MAP, LOGS, self.switches_done)
+            self.switches_done += 1
+            self.fig.canvas.draw()
+        if event.key == 'k':
+            self.move_backward(MAP)
+            self.fig.canvas.draw()
+
+    def plot(self, map_) -> None:
+        fig, ax = plt.subplots()
+        self.fig = fig
+        map_.plot(column='district', ax=ax)
+        fig.canvas.mpl_connect('key_press_event', self.on_press)
+        plt.show()
 
 
 @dataclass
@@ -26,13 +66,13 @@ class PixelMapAnimator:
         if i == 0:
             self.map.map.plot(ax=self.ax, column='district')
             return self.ax.get_children()
-        elif i <= 100:
+        elif i <= 50:
             self.map.set_centering_weights()
             for _ in range(self.frame_gap):
                 first, second = self.map.pick_swap_pair()
                 self.map.swap_pixels(first, second)
             self.map.map.plot(ax=self.ax, column='district')
-        elif i <= 150:
+        elif i <= 80:
             self.map.set_exploring_weights()
             for _ in range(self.frame_gap):
                 first, second = self.map.pick_swap_pair()
@@ -80,7 +120,7 @@ def save():
 
     fig, ax = plt.subplots(1)
     animator = PixelMapAnimator(sim, fig, ax, 100)
-    anim = FuncAnimation(fig, animator, frames=260, interval=450)
+    anim = FuncAnimation(fig, animator, frames=100, interval=450)
     anim.save('testing.gif', writer='imagemagick', fps=10)
 
 
@@ -94,8 +134,13 @@ def main():
     anim = FuncAnimation(fig, animator, frames=100, interval=1000)
     plt.show()
 
+def logging():
+    log_animator = LoggingMapAnimator()
+    log_animator.plot(MAP)
+
 
 if __name__ == '__main__':
-    save()
+    # save()
     # main()
     # time()
+    logging()
