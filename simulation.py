@@ -362,16 +362,17 @@ class GerrymanderingSimulation:
         plt.show()
 
 
-def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging: bool, show_after: bool) -> None:
+def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging: bool, show_after: bool,
+           centering: int = 120_000, exploring: int = 50_000, electioneering: int = 120_000) -> None:
     pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
     sim = GerrymanderingSimulation(pixel_map, num_districts, logging=logging)
-    sim.set_desired_results(np.repeat(.6, 13))
+    sim.set_desired_results(np.repeat(.6, num_districts))
     sim.initialize_districts(verbose=verbose)
     # TODO: update this with tuned hyper-parameters
-    sim.gerrymander(120_000, 50_000, 120_000)
+    sim.gerrymander(centering, exploring, electioneering)
 
     sim.map.to_pickle('simulation_out.pickle')
     print(f'There were {len(pd.unique(sim.map["district"]))} districts')
@@ -391,6 +392,7 @@ def get_cmd_args() -> argparse.Namespace:
     parser.add_argument('--logging', action='store_true', help='Log individual pixel swaps')
     parser.add_argument('--profile', action='store_true', help='Profile the simulation')
     parser.add_argument('--show', action='store_true', help='Show the map at the end of the simulation')
+    parser.add_argument('--specify', type=int, nargs=3, help='The number of iterations for which to gerrymander')
 
     return parser.parse_args()
 
@@ -405,15 +407,17 @@ def main():
         import pstats
 
         with cProfile.Profile() as pr:
+            explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
             driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
-                   cmd_args.show)
+                   cmd_args.show, explore, center, electioneer)
 
         stats = pstats.Stats(pr)
         stats.sort_stats(pstats.SortKey.TIME)
         stats.dump_stats(filename='profile.prof')
     else:
+        explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
         driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
-               cmd_args.show)
+               cmd_args.show, explore, center, electioneer)
 
 
 if __name__ == '__main__':
