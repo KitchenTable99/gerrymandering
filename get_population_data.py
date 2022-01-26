@@ -12,7 +12,8 @@ import requests
 with open('census_api_key_secret.txt', 'r') as fp:
     API_KEY = fp.read()[:-1]
 
-CENSUS_COLUMN = 'P1_001N'
+# CENSUS_COLUMN = 'P1_001N' this is for 2020
+CENSUS_COLUMN = 'P001001'
 
 STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
                 'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
@@ -41,10 +42,11 @@ def get_census(state_id: int) -> pd.DataFrame:
     :param state_id: the number of the state according to the Census Bureau classification.
     :return: a DataFrame containing the population data and the GeoID of the passed state
     """
-    url = f'https://api.census.gov/data/2020/dec/pl?' \
+    url = f'https://api.census.gov/data/2010/dec/pl?' \
           f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={API_KEY}'
 
-    response = requests.get(url)
+    response = requests.get(url, timeout=5)
+    print(response.text)
     response_json = response.json()
 
     return pd.DataFrame(response_json[1:], columns=response_json[0])
