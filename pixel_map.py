@@ -235,7 +235,7 @@ def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFram
     if verbose:
         print('Finding neighbors...')
 
-    def neighbor_list(row: pd.Series) -> List[int]:
+    def neighbor_list(row: pd.Series) -> np.ndarray:
         neighbors = []
         for move in (
                 1,
@@ -248,7 +248,7 @@ def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFram
                 continue
             neighbors.append(target_idx)
 
-        return neighbors
+        return np.array(neighbors)
 
     pixel_map['neighbors'] = pixel_map.apply(lambda row: neighbor_list(row), axis=1)
     pixel_map.set_index('square_num', inplace=True)
@@ -288,6 +288,9 @@ def driver(state: str, res: int):
     dataverse_glob = glob.glob('*_2020.*')
     for file in dataverse_glob:
         os.remove(file)
+
+    # set datatypes
+    # pixel_map.astype({'neighbors'})
 
     path = f'./data/{"test_maps" if res == 3_000 else "maps"}/{state}.pickle'
     pixel_map.to_pickle(path)
