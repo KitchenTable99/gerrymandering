@@ -12,6 +12,7 @@ import pandas as pd
 from scipy.spatial import distance
 from tqdm import tqdm as progress
 
+import bfs
 from districts import District
 from scorers import WeightValues, WeightDict
 
@@ -49,6 +50,7 @@ class GerrymanderingSimulation:
     map: gpd.GeoDataFrame
     num_districts: int
     borders: Dict[int, int] = field(default_factory=dict)
+    pixel_to_row: Dict[int, int] = field(default=dict)
     districts: List[District] = field(default_factory=list)
 
     logging: bool = False
@@ -61,10 +63,11 @@ class GerrymanderingSimulation:
     def __post_init__(self):
         pixels = self.map.index.to_numpy()
         rows = self.map['row_num'].to_numpy()
+        self.neighbors = np.array(self.map['neighbors'].to_list())
         if self.logging:
             with open('log_changes.csv', 'w') as fp:
                 fp.write('square_num,switch_district\n')
-        self.pixel_to_row = {p: r for p, r in zip(pixels, rows)}
+        self.pixel_to_row = dict(zip(pixels, rows))
         self.weight_dict = WeightDict(WeightValues(3, np.array((10_000_000, 50, 1)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
@@ -124,7 +127,7 @@ class GerrymanderingSimulation:
             neighbors = neighbors_arr[row_num]
             focus_class = district_arr[row_num]
 
-            neighbor_classes = [district_arr[self.pixel_to_row[neighbor]] for neighbor in neighbors]
+            neighbor_classes = [district_arr[self.pixel_to_row[neighbor]] for neighbor in neighbors if neighbor != -1]
             different_classes = [n_class != focus_class for n_class in neighbor_classes]
             borders[square_num] = sum(different_classes)
 
@@ -191,7 +194,7 @@ class GerrymanderingSimulation:
            :returns whether or not the switch breaks a district
         """
         # grab all the neighbors that might be broken
-        check_neighbors = [neighbor for neighbor in self.map.at[first, 'neighbors'] if neighbor != second]
+        check_neighbors = [neighbor for neighbor in self.map.at[first, 'neighbors'] if neighbor != second and neighbor != -1]
         class_to_neighbor_dict = {}
         for neighbor in check_neighbors:
             neighbor_class = self.map.at[neighbor, 'district']
@@ -201,38 +204,13 @@ class GerrymanderingSimulation:
                 class_to_neighbor_dict.get(neighbor_class).append(neighbor)
 
         # make sure all pairs can reach each other
-        neighbors = self.map['neighbors'].to_numpy()
         districts = self.map['district'].to_numpy()
-        for class_num, neighbor_list in class_to_neighbor_dict.items():
-            # TODO: perform multi-stage BFS so that we don't search the huge chunk to completion
 
-            # perform a BFS
-            start = neighbor_list.pop()
-            visited = [start]
-            queue = [start]
-            while queue:
-                focus = queue.pop(0)
-                if focus in neighbor_list:
-                    neighbor_list.remove(focus)
-                    if not neighbor_list:
-                        break
+        # with open('cython_test_case.pickle', 'wb') as fp:
+        #     tester = (first, class_to_neighbor_dict, self.pixel_to_row, self.neighbors, districts)
+        #     pickle.dump(tester, fp)
 
-                focus_neighbors = neighbors[self.pixel_to_row[focus]]
-                for focus_neighbor in focus_neighbors:
-                    # only visit the node if the node hasn't been visited, is in the correct class, and isn't the
-                    # origin node
-                    if (
-                            focus_neighbor not in visited and
-                            districts[self.pixel_to_row[focus_neighbor]] == class_num and
-                            focus_neighbor != first
-                    ):
-                        visited.append(focus_neighbor)
-                        queue.append(focus_neighbor)
-
-            if neighbor_list:
-                return True
-
-        return False
+        return bfs.district_breaks(first, class_to_neighbor_dict, self.pixel_to_row, self.neighbors, districts)
 
     def eliminate_district(self,  remove_class: int) -> bool:
         return len(self.districts[remove_class].pixel_rows) <= 1
@@ -254,6 +232,8 @@ class GerrymanderingSimulation:
             random.shuffle(neighbors)
 
             for neighbor in neighbors:
+                if neighbor == -1:
+                    continue
                 second_class = self.map.at[neighbor, 'district']
                 if second_class == first_class or \
                         self.district_breaks(first_pixel, neighbor) or \
@@ -306,8 +286,7 @@ class GerrymanderingSimulation:
 
         # this change was accepted--log the change
         if self.logging:
-            to_append = str(first)
-            to_append += ','
+            to_append = str(first) + ','
             to_append += str(s_class)
             to_append += '\n'
             with open('log_changes.csv', 'a') as fp:
@@ -320,10 +299,12 @@ class GerrymanderingSimulation:
         # update border status of the swapped pixel and all its neighbors
         update_borders = {first}
         for pixel in self.map.at[first, 'neighbors']:
+            if pixel == -1:
+                continue
             update_borders.add(pixel)
         for pixel in update_borders:
             focus_neighbors = self.map.at[pixel, 'neighbors']
-            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors]
+            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors if f_neighbor != -1]
             pixel_class = self.map.at[pixel, 'district']
             different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
             self.borders[pixel] = sum(different_classes)
@@ -336,16 +317,22 @@ class GerrymanderingSimulation:
         for _ in progress(range(num_center_swaps), desc='Centering'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
+            if len(pd.unique(self.map["district"])) != self.num_districts:
+                return
 
         self.set_exploring_weights()
         for _ in progress(range(num_explore_swaps), desc='Exploring'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
+            if len(pd.unique(self.map["district"])) != self.num_districts:
+                return
 
         self.set_electioneering_weights()
         for _ in progress(range(num_electioneer_swaps), desc='Electioneering'):
             first, second = self.pick_swap_pair()
             self.swap_pixels(first, second)
+            if len(pd.unique(self.map["district"])) != self.num_districts:
+                return
 
     def show_districts(self):
         """This function plots a choropleth of the internal GeoDataFrame with the district as the color var."""
@@ -372,10 +359,13 @@ def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging
     sim.set_desired_results(np.repeat(.6, num_districts))
     sim.initialize_districts(verbose=verbose)
     # TODO: update this with tuned hyper-parameters
-    sim.gerrymander(centering, exploring, electioneering)
+    try:
+        sim.gerrymander(centering, exploring, electioneering)
+    except KeyboardInterrupt:
+        print(f'There were {len(pd.unique(sim.map["district"]))} districts')
+        sim.show_districts()
 
     sim.map.to_pickle('simulation_out.pickle')
-    print(f'There were {len(pd.unique(sim.map["district"]))} districts')
 
     if show_after:
         sim.show_districts()
@@ -389,7 +379,7 @@ def get_cmd_args() -> argparse.Namespace:
     parser.add_argument('num_districts', type=int, help='The number of districts to carve the map into.')
     parser.add_argument('--testing', '-t', action='store_true', help='Simulate testing maps')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print out debug information')
-    parser.add_argument('--logging', action='store_true', help='Log individual pixel swaps')
+    parser.add_argument('--logging', '-l', action='store_true', help='Log individual pixel swaps')
     parser.add_argument('--profile', action='store_true', help='Profile the simulation')
     parser.add_argument('--show', action='store_true', help='Show the map at the end of the simulation')
     parser.add_argument('--specify', type=int, nargs=3, help='The number of iterations for which to gerrymander')
