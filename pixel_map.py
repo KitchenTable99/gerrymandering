@@ -248,7 +248,10 @@ def make_pixel_map(voting_map: gpd.GeoDataFrame, population_map: gpd.GeoDataFram
                 continue
             neighbors.append(target_idx)
 
-        return np.array(neighbors)
+        pad = 4 * [-1]
+        neighbors += pad
+
+        return np.array(neighbors[:4])
 
     pixel_map['neighbors'] = pixel_map.apply(lambda row: neighbor_list(row), axis=1)
     pixel_map.set_index('square_num', inplace=True)
