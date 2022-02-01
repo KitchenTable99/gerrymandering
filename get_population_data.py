@@ -46,7 +46,6 @@ def get_census(state_id: int) -> pd.DataFrame:
           f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={API_KEY}'
 
     response = requests.get(url, timeout=5)
-    print(response.text)
     response_json = response.json()
 
     return pd.DataFrame(response_json[1:], columns=response_json[0])
@@ -64,7 +63,10 @@ def main():
 
 def get_all_pop():
     for state, state_num in progress(STATE_DICT.items()):
-        driver(state, state_num, verbose=False)
+        if os.path.exists(f'./data/population/{state}.geojson'):
+            continue
+        else:
+            driver(state, state_num, verbose=False)
 
 
 def driver(state: str, state_num: int, verbose: bool = True):
@@ -79,7 +81,7 @@ def driver(state: str, state_num: int, verbose: bool = True):
     # TIGER
     if verbose:
         print('Unzipping shapefile data...')
-    tiger_template = f'tl_2021_{state_num:02}_tabblock20'
+    tiger_template = f'tl_2010_{state_num:02}_tabblock10'
     tiger_zip = f'./data/tiger_shapefiles/{tiger_template}.zip'
     with ZipFile(tiger_zip, 'r') as zip_:
         zip_.extractall()
@@ -87,8 +89,8 @@ def driver(state: str, state_num: int, verbose: bool = True):
         print('Reading shapefile data...')
     tiger_df = gpd.read_file(tiger_template + '.shp')
     # clean up TIGER data
-    tiger_df = tiger_df[['GEOID20', 'geometry']]
-    tiger_df.rename(columns={'GEOID20': 'geo_id'}, inplace=True)
+    tiger_df = tiger_df[['GEOID10', 'geometry']]
+    tiger_df.rename(columns={'GEOID10': 'geo_id'}, inplace=True)
 
     # merge and clean
     if verbose:
