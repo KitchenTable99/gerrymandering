@@ -1,0 +1,8 @@
+lib c error:
+	1: uninstall geopandas
+	2: reinstall using "conda install -c conda-forge geopandas --yes"
+
+
+env configuration:
+	1: conda install --file requirements.txt --yes
+	2: play around with fiona and geopandas installs until it's good.
