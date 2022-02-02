@@ -3,8 +3,7 @@ import argparse
 import pickle
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Generator, Set
-from border_gen import BorderGenerator
+from typing import List, Dict, Tuple, Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -14,6 +13,7 @@ from scipy.spatial import distance
 from tqdm import tqdm as progress
 
 import bfs
+from border_gen import BorderGenerator
 from districts import District
 from scorers import WeightValues, WeightDict
 
@@ -46,16 +46,6 @@ class GerrymanderingSimulation:
         self.neighbors = np.array(self.map['neighbors'].to_list())
         self.pixel_to_row = dict(zip(pixels, rows))
 
-        if self.log_swaps:
-            with open(f'{self.log_swaps}.csv', 'w') as fp:
-                fp.write('square_num,switch_district\n')
-            self.logging = 'swaps'
-
-        if self.log_score:
-            with open(f'{self.log_score}.csv', 'w') as fp:
-                fp.write('score\n')
-            self.logging = 'score'
-
         self.weight_dict = WeightDict(WeightValues(3, np.array((1, 0, 0)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
@@ -63,8 +53,12 @@ class GerrymanderingSimulation:
     def set_logging(self, log: str, name: Optional[str] = None) -> None:
         if log == 'score':
             self.log_score = name
+            with open(f'{self.log_score}.csv', 'w') as fp:
+                fp.write('score\n')
         elif log == 'swaps':
             self.log_swaps = name
+            with open(f'{self.log_swaps}.csv', 'w') as fp:
+                fp.write('square_num,switch_district\n')
 
     def set_centering_weights(self) -> None:
         border_dict = self.border_gen.current_dict
