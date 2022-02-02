@@ -3,7 +3,8 @@ import argparse
 import pickle
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Generator
+from typing import List, Dict, Tuple, Optional, Generator, Set
+from bisect import bisect_left
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -21,6 +22,60 @@ STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks'
                 'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
                 'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy',
                 'all'}
+
+
+class BorderGenerator:
+
+    freq_list: List[int]
+    current_dict: Dict[int, int]
+    st_weight: int
+    yielded: Set[int]
+
+    def __init__(self, border_dict: Dict[int, int], st_weight: int):
+        freq_list = []
+        for pixel, num_neighbors in border_dict.items():
+            exp_value = num_neighbors ** st_weight
+            for _ in range(exp_value):
+                freq_list.append(pixel)
+
+        self.freq_list = sorted(freq_list)
+        self.current_dict = border_dict
+        self.st_weight = st_weight
+        self.yielded = set()
+
+    def __next__(self):
+        if len(self.freq_list) == len(self.yielded):
+            raise Exception('No pixels are valid')
+
+        while True:
+            return_idx = random.randint(0, len(self.freq_list) - 1)
+            if return_idx not in self.yielded:
+                self.yielded.add(return_idx)
+                break
+
+        return self.freq_list[return_idx]
+
+    def __iter__(self):
+        return self
+
+    def update(self, update_dict: Dict[int, int]) -> None:
+        for pixel, num_neighbors in update_dict.items():
+            neighbor_diff = num_neighbors - (current_entries := self.current_dict[pixel])
+            if neighbor_diff > 0:
+                to_add = ((current_entries + neighbor_diff) ** self.st_weight) - (current_entries ** self.st_weight)
+                add_idx = bisect_left(self.freq_list, pixel)
+
+                for _ in range(to_add):
+                    self.freq_list.insert(add_idx, pixel)
+            elif neighbor_diff < 0:
+                to_remove = (current_entries ** self.st_weight) - ((current_entries + neighbor_diff) ** self.st_weight)
+                remove_idx = bisect_left(self.freq_list, pixel)
+
+                for _ in range(to_remove):
+                    self.freq_list.pop(remove_idx)
+            self.current_dict[pixel] = num_neighbors
+
+        self.yielded = set()
 
 
 def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
@@ -50,6 +105,7 @@ class GerrymanderingSimulation:
     map: gpd.GeoDataFrame
     num_districts: int
     log_name: str
+    border_gen: BorderGenerator = field(default_factory=lambda: BorderGenerator({}, 1))
     borders: Dict[int, int] = field(default_factory=dict)
     pixel_to_row: Dict[int, int] = field(default=dict)
     districts: List[District] = field(default_factory=list)
@@ -82,13 +138,19 @@ class GerrymanderingSimulation:
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
 
     def set_centering_weights(self) -> None:
+        border_dict = self.border_gen.current_dict
         self.weights = self.weight_dict.centering
+        self.border_gen = BorderGenerator(border_dict, self.weights.statistical_surface_tension)
 
     def set_exploring_weights(self) -> None:
+        border_dict = self.border_gen.current_dict
         self.weights = self.weight_dict.exploring
+        self.border_gen = BorderGenerator(border_dict, self.weights.statistical_surface_tension)
 
     def set_electioneering_weights(self) -> None:
+        border_dict = self.border_gen.current_dict
         self.weights = self.weight_dict.electioneering
+        self.border_gen = BorderGenerator(border_dict, self.weights.statistical_surface_tension)
 
     def set_desired_results(self, results: np.ndarray) -> None:
         self.desired_results = results
@@ -143,9 +205,9 @@ class GerrymanderingSimulation:
         if verbose:
             pbar.close()
 
-        self.borders = borders
+        self.border_gen = BorderGenerator(borders, self.weight_dict.centering.statistical_surface_tension)
 
-        # create the border objects
+        # create the district objects
         if verbose:
             print('Creating districts...')
         self.districts = [District.from_df(self.map[self.map['district'] == district])
@@ -227,7 +289,7 @@ class GerrymanderingSimulation:
 
         return bfs.district_breaks(first, class_to_neighbor_dict, self.pixel_to_row, self.neighbors, districts)
 
-    def eliminate_district(self,  remove_class: int) -> bool:
+    def eliminate_district(self, remove_class: int) -> bool:
         return len(self.districts[remove_class].pixel_rows) <= 1
 
     def pick_swap_pair(self) -> Tuple[int, int]:
@@ -236,10 +298,9 @@ class GerrymanderingSimulation:
            :returns the indices of the first and second pixels to switch
         """
         # randomly select the first pixel
-        random_borders = border_generator(self.borders, self.weights.statistical_surface_tension)
         while True:
             # get a border pixel that we haven't tried yet
-            first_pixel = next(random_borders)
+            first_pixel = next(self.border_gen)
 
             # find a neighbor with a different class
             first_class = self.map.at[first_pixel, 'district']
@@ -319,12 +380,16 @@ class GerrymanderingSimulation:
             if pixel == -1:
                 continue
             update_borders.add(pixel)
+        border_update_dict = {}
         for pixel in update_borders:
             focus_neighbors = self.map.at[pixel, 'neighbors']
-            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors if f_neighbor != -1]
+            f_neighbor_class = [self.map.at[f_neighbor, 'district'] for f_neighbor in focus_neighbors if
+                                f_neighbor != -1]
             pixel_class = self.map.at[pixel, 'district']
             different_classes = [n_class != pixel_class for n_class in f_neighbor_class]
-            self.borders[pixel] = sum(different_classes)
+            border_update_dict[pixel] = sum(different_classes)
+
+        self.border_gen.update(border_update_dict)
 
     def gerrymander(self, num_center_swaps: int, num_explore_swaps: int, num_electioneer_swaps: int) -> None:
         if np.sum(self.desired_results) == 0:
