@@ -4,7 +4,7 @@ import pickle
 import random
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Generator, Set
-from bisect import bisect_left
+from border_gen import BorderGenerator
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -17,100 +17,23 @@ import bfs
 from districts import District
 from scorers import WeightValues, WeightDict
 
-
 STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
                 'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
                 'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy',
                 'all'}
 
 
-class BorderGenerator:
-
-    freq_list: List[int]
-    current_dict: Dict[int, int]
-    st_weight: int
-    yielded: Set[int]
-
-    def __init__(self, border_dict: Dict[int, int], st_weight: int):
-        freq_list = []
-        for pixel, num_neighbors in border_dict.items():
-            exp_value = num_neighbors ** st_weight
-            for _ in range(exp_value):
-                freq_list.append(pixel)
-
-        self.freq_list = sorted(freq_list)
-        self.current_dict = border_dict
-        self.st_weight = st_weight
-        self.yielded = set()
-
-    def __next__(self):
-        if len(self.freq_list) == len(self.yielded):
-            raise Exception('No pixels are valid')
-
-        while True:
-            return_idx = random.randint(0, len(self.freq_list) - 1)
-            if return_idx not in self.yielded:
-                self.yielded.add(return_idx)
-                break
-
-        return self.freq_list[return_idx]
-
-    def __iter__(self):
-        return self
-
-    def update(self, update_dict: Dict[int, int]) -> None:
-        for pixel, num_neighbors in update_dict.items():
-            neighbor_diff = num_neighbors - (current_entries := self.current_dict[pixel])
-            if neighbor_diff > 0:
-                to_add = ((current_entries + neighbor_diff) ** self.st_weight) - (current_entries ** self.st_weight)
-                add_idx = bisect_left(self.freq_list, pixel)
-
-                for _ in range(to_add):
-                    self.freq_list.insert(add_idx, pixel)
-            elif neighbor_diff < 0:
-                to_remove = (current_entries ** self.st_weight) - ((current_entries + neighbor_diff) ** self.st_weight)
-                remove_idx = bisect_left(self.freq_list, pixel)
-
-                for _ in range(to_remove):
-                    self.freq_list.pop(remove_idx)
-            self.current_dict[pixel] = num_neighbors
-
-        self.yielded = set()
-
-
-def border_generator(d: Dict[int, int], st_weight: int) -> Generator[int, None, None]:
-    """This generator will create a list from a frequency dictionary, shuffle the list, then return the indices one
-       by one.
-
-       :param d: A dictionary with square_nums as keys and the number of new borders as values
-       :param st_weight: The exponent to which the number of borders should be raised to get the frequency
-
-       :return yields an integer which represents a square_num
-    """
-    # create frequency list
-    freq_list = []
-    for key, value in d.items():
-        exp_value = value ** st_weight
-        for _ in range(exp_value):
-            freq_list.append(key)
-
-    # yield random values in the list one by one
-    np.random.shuffle(freq_list)
-    for counter in range(len(freq_list) - 1):
-        yield freq_list[counter]
-
-
 @dataclass
 class GerrymanderingSimulation:
     map: gpd.GeoDataFrame
     num_districts: int
-    log_name: str
-    border_gen: BorderGenerator = field(default_factory=lambda: BorderGenerator({}, 1))
+    border_gen: Optional[BorderGenerator] = None
     borders: Dict[int, int] = field(default_factory=dict)
     pixel_to_row: Dict[int, int] = field(default=dict)
     districts: List[District] = field(default_factory=list)
 
-    logging: str = ''
+    log_swaps: str = ''
+    log_score: str = ''
 
     weight_dict: Optional[WeightDict] = None
     weights: Optional[WeightValues] = None
@@ -123,19 +46,25 @@ class GerrymanderingSimulation:
         self.neighbors = np.array(self.map['neighbors'].to_list())
         self.pixel_to_row = dict(zip(pixels, rows))
 
-        if self.logging == 'swaps':
-            with open('log_changes.csv', 'w') as fp:
+        if self.log_swaps:
+            with open(f'{self.log_swaps}.csv', 'w') as fp:
                 fp.write('square_num,switch_district\n')
             self.logging = 'swaps'
 
-        if self.logging == 'score':
-            with open(f'{self.log_name}.csv', 'w') as fp:
+        if self.log_score:
+            with open(f'{self.log_score}.csv', 'w') as fp:
                 fp.write('score\n')
             self.logging = 'score'
 
         self.weight_dict = WeightDict(WeightValues(3, np.array((1, 0, 0)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
+
+    def set_logging(self, log: str, name: Optional[str] = None) -> None:
+        if log == 'score':
+            self.log_score = name
+        elif log == 'swaps':
+            self.log_swaps = name
 
     def set_centering_weights(self) -> None:
         border_dict = self.border_gen.current_dict
@@ -171,8 +100,8 @@ class GerrymanderingSimulation:
         # assign each pixel to the appropriate class
         self.map['district'] = assignments
 
-        if self.logging == 'swaps':
-            self.map.to_pickle('log.pickle')
+        if self.log_swaps:
+            self.map.to_pickle(f'{self.log_swaps}.pickle')
 
     def initialize_districts(self, verbose: bool = False) -> None:
         """This function initializes the districts by tessellating the map, finding the borders,
@@ -255,9 +184,9 @@ class GerrymanderingSimulation:
 
         new_score = self.weights.scoring_weights.T @ scoring
 
-        if self.logging == 'score':
-            with open(f'{self.log_name}.csv', 'a') as fp:
-                fp.write(f'{scoring[0]},{new_score}\n')
+        if self.log_score:
+            with open(f'{self.log_score}.csv', 'a') as fp:
+                fp.write(f'{new_score}\n')
 
         return new_score
 
@@ -363,11 +292,11 @@ class GerrymanderingSimulation:
             return
 
         # this change was accepted--log the change
-        if self.logging:
+        if self.log_swaps:
             to_append = str(first) + ','
             to_append += str(s_class)
             to_append += '\n'
-            with open('log_changes.csv', 'a') as fp:
+            with open(f'{self.log_swaps}.csv', 'a') as fp:
                 fp.write(to_append)
 
         # update the score, district objects, pixel classification
@@ -395,6 +324,7 @@ class GerrymanderingSimulation:
         if np.sum(self.desired_results) == 0:
             raise Exception('You need to set the desired results')
         # three phases
+        # TODO: rollback mechanism
         self.set_centering_weights()
         for _ in progress(range(num_center_swaps), desc='Centering'):
             first, second = self.pick_swap_pair()
@@ -431,13 +361,14 @@ class GerrymanderingSimulation:
         plt.show()
 
 
-def driver(state: str, num_districts: int, log_name: str, testing: bool, verbose: bool, logging: str, show_after: bool,
-           centering: int = 120_000, exploring: int = 50_000, electioneering: int = 120_000) -> None:
+def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging: str, log_name: str, show_after: bool,
+           centering: int, exploring: int, electioneering) -> None:
     pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
-    sim = GerrymanderingSimulation(pixel_map, num_districts, log_name, logging=logging)
+    sim = GerrymanderingSimulation(pixel_map, num_districts)
+    sim.set_logging(logging, log_name)
     sim.set_desired_results(np.repeat(.6, num_districts))
     sim.initialize_districts(verbose=verbose)
     # TODO: update this with tuned hyper-parameters
@@ -461,7 +392,9 @@ def get_cmd_args() -> argparse.Namespace:
     parser.add_argument('num_districts', type=int, help='The number of districts to carve the map into.')
     parser.add_argument('--testing', '-t', action='store_true', help='Simulate testing maps')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print out debug information')
-    parser.add_argument('--logging', '-l', type=str, choices={'swaps', 'score'}, help='Log either the swaps or score')
+    parser.add_argument('--logging', '-l', type=str, choices={'swaps', 'score'}, help='Log either the swaps '
+                                                                                               'or score.')
+    parser.add_argument('--log_name', type=str, default='log', help='The name of the log file. Defaults to log')
     parser.add_argument('--profile', action='store_true', help='Profile the simulation')
     parser.add_argument('--show', action='store_true', help='Show the map at the end of the simulation')
     parser.add_argument('--specify', type=int, nargs=3, help='The number of iterations for which to gerrymander')
@@ -480,16 +413,16 @@ def main():
 
         with cProfile.Profile() as pr:
             explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
-            driver(cmd_args.state, cmd_args.num_districts, 'hyper_tuning', cmd_args.testing, cmd_args.verbose,
-                   cmd_args.logging, cmd_args.show, explore, center, electioneer)
+            driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
+                   cmd_args.log_name, cmd_args.show, explore, center, electioneer)
 
         stats = pstats.Stats(pr)
         stats.sort_stats(pstats.SortKey.TIME)
         stats.dump_stats(filename='profile.prof')
     else:
         explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
-        driver(cmd_args.state, cmd_args.num_districts, 'hyper_tuning', cmd_args.testing, cmd_args.verbose,
-               cmd_args.logging, cmd_args.show, explore, center, electioneer)
+        driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
+               cmd_args.log_name, cmd_args.show, explore, center, electioneer)
 
 
 if __name__ == '__main__':
