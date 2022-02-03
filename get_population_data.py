@@ -42,7 +42,7 @@ def get_census(year: int, column: str, state_id: int, api_key: str) -> pd.DataFr
     url = f'https://api.census.gov/data/{year}/dec/pl?' \
           f'get={column},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={api_key}'
 
-    response = requests.get(url, timeout=5)
+    response = requests.get(url)
     response_json = response.json()
 
     return pd.DataFrame(response_json[1:], columns=response_json[0])
@@ -91,8 +91,9 @@ def driver(state: str, state_num: int, year: int, verbose: bool = True):
         print('Reading shapefile data...')
     tiger_df = gpd.read_file(tiger_template + '.shp')
     # clean up TIGER data
-    tiger_df = tiger_df[[f'GEOID{year % 100}', 'geometry']]
-    tiger_df.rename(columns={f'GEOID{year % 100}': 'geo_id'}, inplace=True)
+    returned_geoid = 'GEOID10' if year == 2010 else 'GEOID20'
+    tiger_df = tiger_df[[f'{returned_geoid}', 'geometry']]
+    tiger_df.rename(columns={f'{returned_geoid}': 'geo_id'}, inplace=True)
 
     # merge and clean
     if verbose:

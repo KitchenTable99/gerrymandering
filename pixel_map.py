@@ -267,15 +267,19 @@ def add_numpy_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
-def driver(state: str, res: int):
+def driver(state: str, year: int, res: int):
     # get voting data
-    with ZipFile(f'./data/dataverse_files/{state}_2020.zip', 'r') as zip_:
+    with ZipFile(f'./data/dataverse_files/{year}/{state}_{year}.zip', 'r') as zip_:
         zip_.extractall()
-    votes = gpd.read_file(f'{state}_2020.shp')
-    votes = votes[['G20PREDBID', 'G20PRERTRU', 'geometry']].rename(
-        columns={'G20PREDBID': 'blue_votes', 'G20PRERTRU': 'red_votes'})
+    votes = gpd.read_file(f'{state}_{year}.shp')
+    if year == 2020:
+        votes = votes[['G20PREDBID', 'G20PRERTRU', 'geometry']].rename(
+            columns={'G20PREDBID': 'blue_votes', 'G20PRERTRU': 'red_votes'})
+    else:
+        votes = votes[['G16PRERTRU', 'G16PREDCLI', 'geometry']].rename(
+            columns={'G16PREDCLI': 'blue_votes', 'G16PRERTRU': 'red_votes'})
 
-    pop = gpd.read_file(f'./data/population/{state}.geojson')
+    pop = gpd.read_file(f'./data/population/{2010 if year == 2016 else 2020}/{state}.geojson')
 
     pixel_map = make_pixel_map(votes, pop, res, verbose=True)
     pixel_map = add_numpy_geometry(pixel_map)
@@ -288,14 +292,11 @@ def driver(state: str, res: int):
     print(f'{pop_loss} people\n{red_loss} Republican votes\n{blue_loss} Democratic votes')
 
     # remove all the unzipped stuff
-    dataverse_glob = glob.glob('*_2020.*')
+    dataverse_glob = glob.glob(f'*_{year}.*')
     for file in dataverse_glob:
         os.remove(file)
 
-    # set datatypes
-    # pixel_map.astype({'neighbors'})
-
-    path = f'./data/{"test_maps" if res == 3_000 else "maps"}/{state}.pickle'
+    path = f'./data/{"test_maps" if res == 3_000 else "maps"}/{year}/{state}.pickle'
     pixel_map.to_pickle(path)
 
 
@@ -306,6 +307,7 @@ def get_cmd_args() -> argparse.Namespace:
                                                  'of 250).')
     parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to create maps. If all is '
                                                                       'passed, all 50 states will be queried')
+    parser.add_argument('year', type=int, choices={2016, 2020}, help='The year for which to create a map')
     parser.add_argument('--testing', '-t', action='store_true', help='Create testing maps')
 
     return parser.parse_args()
@@ -318,7 +320,7 @@ def main():
 
     res = 3_000 if cmd_args.testing else 30_000
     print(f'Preparing {cmd_args.state.upper()}...')
-    driver(cmd_args.state, res)
+    driver(cmd_args.state, cmd_args.year, res)
 
 
 if __name__ == '__main__':

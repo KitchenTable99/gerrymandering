@@ -26,6 +26,7 @@ def get_cmd_args() -> argparse.Namespace:
     parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state to simulate. If all is '
                                                                       'passed, all 50 states will be simulated.')
     parser.add_argument('num_districts', type=int, help='The number of districts to carve the map into.')
+    parser.add_argument('year', type=int, choices={2016, 2020}, help='Which year to simulate')
     parser.add_argument('--testing', '-t', action='store_true', help='Simulate testing maps')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print out debug information')
     parser.add_argument('--logging', '-l', type=str, choices={'swaps', 'score'}, help='Log either the swaps '
@@ -64,7 +65,7 @@ def sim_driver(pixel_map: gpd.GeoDataFrame, num_districts: int, verbose: bool, l
 
 
 def driver(cmd_args: argparse.Namespace):
-    pickle_path = f'./data/{"test_maps" if cmd_args.testing else "maps"}/{cmd_args.state}.pickle'
+    pickle_path = f'./data/{"test_maps" if cmd_args.testing else "maps"}/{cmd_args.year}/{cmd_args.state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
@@ -72,7 +73,7 @@ def driver(cmd_args: argparse.Namespace):
     success_count = 0
     while success_count < 5:
         try:
-            sim_driver(pixel_map, cmd_args.num_districts, cmd_args.verbose, 'hyper_tuning', 500_000, 0, 0)
+            sim_driver(pixel_map, cmd_args.num_districts, cmd_args.verbose, 'hyper_tuning', 10_000, 0, 0)
             success_count += 1
         except ZeroDivisionError:
             continue

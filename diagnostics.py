@@ -1,7 +1,6 @@
 # This file contains diagnostics for PixelMaps
 import argparse
 import pickle
-import sys
 
 import matplotlib.pyplot as plt
 
@@ -12,8 +11,8 @@ STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks'
                 'pa', 'ar', 'nj', 'az', 'ma', 'il', 'nc', 'mo', 'ut', 'wa', 'ak', 'de', 'id', 'tx', 'co', 'vt', 'wy'}
 
 
-def driver(state: str, testing: bool):
-    pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
+def driver(state: str, year: int, testing: bool):
+    pickle_path = f'./data/{"test_maps" if testing else "maps"}/{year}/{state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map = pickle.load(fp)
 
@@ -48,6 +47,7 @@ def get_cmd_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='This program investigates a state\'s map. If testing is passed, the '
                                                  'testing map will be investigated.')
     parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to check diagnostics.')
+    parser.add_argument('year', type=int, choices={2016, 2020}, help='The year for which to check diagnostics.')
     parser.add_argument('--testing', '-t', action='store_true', help='Diagnose testing maps')
 
     return parser.parse_args()
@@ -56,7 +56,7 @@ def get_cmd_args() -> argparse.Namespace:
 def main():
     cmd_args = get_cmd_args()
     print(f'Reading {cmd_args.state.upper()}...')
-    driver(cmd_args.state, cmd_args.testing)
+    driver(cmd_args.state, cmd_args.year, cmd_args.testing)
 
 
 if __name__ == '__main__':

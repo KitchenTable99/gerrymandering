@@ -46,7 +46,7 @@ class GerrymanderingSimulation:
         self.neighbors = np.array(self.map['neighbors'].to_list())
         self.pixel_to_row = dict(zip(pixels, rows))
 
-        self.weight_dict = WeightDict(WeightValues(3, np.array((1, 0, 0)), .5),
+        self.weight_dict = WeightDict(WeightValues(3, np.array((2, 1, 0)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
 
@@ -355,9 +355,9 @@ class GerrymanderingSimulation:
         plt.show()
 
 
-def driver(state: str, num_districts: int, testing: bool, verbose: bool, logging: str, log_name: str, show_after: bool,
-           centering: int, exploring: int, electioneering) -> None:
-    pickle_path = f'./data/{"test_maps" if testing else "maps"}/{state}.pickle'
+def driver(state: str, num_districts: int, year: int, testing: bool, verbose: bool, logging: str, log_name: str,
+           show_after: bool, centering: int, exploring: int, electioneering) -> None:
+    pickle_path = f'./data/{"test_maps" if testing else "maps"}/{year}/{state}.pickle'
     with open(pickle_path, 'rb') as fp:
         pixel_map: gpd.GeoDataFrame = pickle.load(fp)
 
@@ -384,6 +384,7 @@ def get_cmd_args() -> argparse.Namespace:
     parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state to simulate. If all is '
                                                                       'passed, all 50 states will be simulated.')
     parser.add_argument('num_districts', type=int, help='The number of districts to carve the map into.')
+    parser.add_argument('year', type=int, choices={2016, 2020}, help='Which year to simulate')
     parser.add_argument('--testing', '-t', action='store_true', help='Simulate testing maps')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print out debug information')
     parser.add_argument('--logging', '-l', type=str, choices={'swaps', 'score'}, help='Log either the swaps '
@@ -407,16 +408,16 @@ def main():
 
         with cProfile.Profile() as pr:
             explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
-            driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
-                   cmd_args.log_name, cmd_args.show, explore, center, electioneer)
+            driver(cmd_args.state, cmd_args.num_districts, cmd_args.year, cmd_args.testing, cmd_args.verbose,
+                   cmd_args.logging, cmd_args.log_name, cmd_args.show, explore, center, electioneer)
 
         stats = pstats.Stats(pr)
         stats.sort_stats(pstats.SortKey.TIME)
         stats.dump_stats(filename='profile.prof')
     else:
         explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
-        driver(cmd_args.state, cmd_args.num_districts, cmd_args.testing, cmd_args.verbose, cmd_args.logging,
-               cmd_args.log_name, cmd_args.show, explore, center, electioneer)
+        driver(cmd_args.state, cmd_args.num_districts, cmd_args.year, cmd_args.testing, cmd_args.verbose,
+               cmd_args.logging, cmd_args.log_name, cmd_args.show, explore, center, electioneer)
 
 
 if __name__ == '__main__':
