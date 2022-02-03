@@ -9,11 +9,7 @@ import geopandas as gpd
 import pandas as pd
 import requests
 
-with open('census_api_key_secret.txt', 'r') as fp:
-    API_KEY = fp.read()[:-1]
 
-# CENSUS_COLUMN = 'P1_001N' this is for 2020
-CENSUS_COLUMN = 'P001001'
 
 STATE_ABBREV = {'oh', 'ms', 'ny', 'ky', 'or', 'nv', 'wi', 'md', 'in', 'ct', 'ks', 'nd', 'sc', 'tn', 'ca', 'va', 'me',
                 'sd', 'nm', 'la', 'dc', 'ok', 'mi', 'ri', 'ga', 'mn', 'ne', 'al', 'nh', 'mt', 'wv', 'fl', 'hi', 'ia',
@@ -33,17 +29,18 @@ def get_cmd_args() -> argparse.Namespace:
                                                  'directory.')
     parser.add_argument('state', type=str, choices=STATE_ABBREV, help='The state for which to get data. If all is '
                                                                       'passed, all 50 states will be queried')
+    parser.add_argument('year', type=int, choices={2010, 2020}, help='Which census year do you want data from?')
 
     return parser.parse_args()
 
 
-def get_census(state_id: int) -> pd.DataFrame:
+def get_census(year: int, column: str, state_id: int, api_key: str) -> pd.DataFrame:
     """
     :param state_id: the number of the state according to the Census Bureau classification.
     :return: a DataFrame containing the population data and the GeoID of the passed state
     """
-    url = f'https://api.census.gov/data/2010/dec/pl?' \
-          f'get={CENSUS_COLUMN},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={API_KEY}'
+    url = f'https://api.census.gov/data/{year}/dec/pl?' \
+          f'get={column},GEO_ID&for=block:*&in=state:{state_id:02}&in=county:*&in=tract:*&key={api_key}'
 
     response = requests.get(url, timeout=5)
     response_json = response.json()
@@ -55,52 +52,57 @@ def main():
     cmd_args = get_cmd_args()
 
     if cmd_args.state == 'all':
-        get_all_pop()
+        get_all_pop(cmd_args.year)
     else:
         state_num = STATE_DICT.get(cmd_args.state)
-        driver(cmd_args.state, state_num)
+        driver(cmd_args.state, state_num, cmd_args.year)
 
 
-def get_all_pop():
+def get_all_pop(year: int):
     for state, state_num in progress(STATE_DICT.items()):
-        if os.path.exists(f'./data/population/{state}.geojson'):
+        if os.path.exists(f'./data/population/{year}/{state}.geojson'):
             continue
         else:
-            driver(state, state_num, verbose=False)
+            driver(state, state_num, year, verbose=False)
 
 
-def driver(state: str, state_num: int, verbose: bool = True):
+def driver(state: str, state_num: int, year: int, verbose: bool = True):
     # population
     if verbose:
         print(f'Getting {state.upper()} population data...')
-    population_df = get_census(state_num)
+    # set up parameters
+    with open('census_api_key_secret.txt', 'r') as fp:
+        api_key = fp.read()[:-1]
+
+    column = 'P001001' if year == 2010 else 'P1_001N'
+    population_df = get_census(year, column, state_num, api_key)
     # clean up population data
     population_df['geo_id'] = population_df.apply(lambda row: row.GEO_ID.split('US')[-1], axis=1)
-    population_df = population_df[['geo_id', CENSUS_COLUMN]]
+    population_df = population_df[['geo_id', column]]
 
     # TIGER
     if verbose:
         print('Unzipping shapefile data...')
-    tiger_template = f'tl_2010_{state_num:02}_tabblock10'
-    tiger_zip = f'./data/tiger_shapefiles/{tiger_template}.zip'
+    tiger_template = f'tl_{year}_{state_num:02}_tabblock{year % 100}'  # nb: year % 100 returns the last two digits
+    tiger_zip = f'./data/tiger_shapefiles/{year}/{tiger_template}.zip'
     with ZipFile(tiger_zip, 'r') as zip_:
         zip_.extractall()
     if verbose:
         print('Reading shapefile data...')
     tiger_df = gpd.read_file(tiger_template + '.shp')
     # clean up TIGER data
-    tiger_df = tiger_df[['GEOID10', 'geometry']]
-    tiger_df.rename(columns={'GEOID10': 'geo_id'}, inplace=True)
+    tiger_df = tiger_df[[f'GEOID{year % 100}', 'geometry']]
+    tiger_df.rename(columns={f'GEOID{year % 100}': 'geo_id'}, inplace=True)
 
     # merge and clean
     if verbose:
         print('Merging and saving data...')
     merged = tiger_df.merge(population_df, on='geo_id')
-    merged.rename(columns={CENSUS_COLUMN: 'population'}, inplace=True)
+    merged.rename(columns={column: 'population'}, inplace=True)
     merged = merged.astype({'population': int})
 
     # save file
-    save_path = f'./data/population/{state}.geojson'
+    save_path = f'./data/population/{year}/{state}.geojson'
     merged.to_file(save_path, driver='GeoJSON')
 
     # delete all the tiger stuff
