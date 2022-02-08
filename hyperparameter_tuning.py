@@ -73,16 +73,11 @@ def driver(cmd_args: argparse.Namespace):
     success_count = 0
     while success_count < 5:
         try:
-            sim_driver(pixel_map, cmd_args.num_districts, cmd_args.verbose, 'hyper_tuning', 10_000, 0, 0)
+            sim_driver(pixel_map, cmd_args.num_districts, cmd_args.verbose, 'hyper_tuning', 1_000_000, 0, 0)
             success_count += 1
         except ZeroDivisionError:
             continue
         df = pd.read_csv('hyper_tuning.csv')
-        # mins = rolling_min(df.score)
-        # mins -= mins.min()
-        # mins /= mins.max()
-        # mins -= 1
-        # mins = abs(mins)
         big_df[str(success_count)] = df.score[1:]
 
     big_df['mean'] = big_df.mean(axis=1)

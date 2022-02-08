@@ -2,6 +2,7 @@
 import argparse
 import pickle
 import random
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 
@@ -32,6 +33,9 @@ class GerrymanderingSimulation:
     pixel_to_row: Dict[int, int] = field(default=dict)
     districts: List[District] = field(default_factory=list)
 
+    best_score: float = 0
+    best_districts: np.ndarray = field(default_factory=lambda: np.zeros(shape=1))
+
     log_swaps: str = ''
     log_score: str = ''
 
@@ -46,7 +50,7 @@ class GerrymanderingSimulation:
         self.neighbors = np.array(self.map['neighbors'].to_list())
         self.pixel_to_row = dict(zip(pixels, rows))
 
-        self.weight_dict = WeightDict(WeightValues(3, np.array((2, 1, 0)), .5),
+        self.weight_dict = WeightDict(WeightValues(3, np.array((5, 1, 0)), .5),
                                       WeightValues(1, np.array((30, -30, 30)), .75),
                                       WeightValues(3, np.array((3, 5, 5_000)), .5))
 
@@ -85,10 +89,25 @@ class GerrymanderingSimulation:
         point_array = np.vstack(point_array)
 
         # randomly select self.num_districts unique Pixels in the map
-        index = np.random.choice(point_array.shape[0], self.num_districts, replace=False)
+        index = random.choices(range(point_array.shape[0]), weights=self.map['population'].to_numpy(), k=self.num_districts)
         centroids = point_array[index]
 
         # find the closest centroid
+        distances = distance.cdist(point_array, centroids)
+        assignments = np.argmin(distances, axis=1)
+        # assign each pixel to the appropriate class
+        self.map['district'] = assignments
+
+        if self.log_swaps:
+            self.map.to_pickle(f'{self.log_swaps}.pickle')
+
+    def relax_tessellation(self, centroids: List[np.ndarray]) -> None:
+        # convert points into an array to use in cdist
+        point_array = self.map['np_geometry'].to_numpy()
+        point_array = np.vstack(point_array)
+
+        # find the closest centroid
+        centroids = np.array(centroids)
         distances = distance.cdist(point_array, centroids)
         assignments = np.argmin(distances, axis=1)
         # assign each pixel to the appropriate class
@@ -104,6 +123,30 @@ class GerrymanderingSimulation:
         if verbose:
             print('Tessellating...')
         self.tessellate()
+
+        # create the district objects
+        if verbose:
+            print('Creating districts...')
+        self.districts = [District.from_df(self.map[self.map['district'] == district])
+                          for district in range(self.num_districts)]
+        self.show_districts()
+        for _ in range(500_000):
+            pop_arr = np.array([district.population for district in self.districts])
+            pop_arr -= np.mean(pop_arr)
+            last_pop_score = np.sum(np.power(pop_arr, 2))
+            print(last_pop_score)
+            self.relax_tessellation([district.population_center for district in self.districts])
+            self.districts = [District.from_df(self.map[self.map['district'] == district])
+                              for district in range(self.num_districts)]
+            pop_arr = np.array([district.population for district in self.districts])
+            pop_arr -= np.mean(pop_arr)
+            this_pop_score = np.sum(np.abs(pop_arr))
+            if last_pop_score - this_pop_score < 1:
+                break
+        pop_arr = np.array([district.population for district in self.districts])
+        pop_arr -= np.mean(pop_arr)
+        print(np.sum(np.power(pop_arr, 4)))
+        self.show_districts()
 
         # find the borders using a BFS
         if verbose:
@@ -130,11 +173,6 @@ class GerrymanderingSimulation:
 
         self.border_gen = BorderGenerator(borders, self.weight_dict.centering.statistical_surface_tension)
 
-        # create the district objects
-        if verbose:
-            print('Creating districts...')
-        self.districts = [District.from_df(self.map[self.map['district'] == district])
-                          for district in range(self.num_districts)]
 
         # find the distance from each pixel to its population center
         if verbose:
@@ -144,8 +182,11 @@ class GerrymanderingSimulation:
         # score the map
         if verbose:
             print('Scoring...')
-        self.weights = WeightValues(0, np.array((999999, 999999, 999999)), .5)
+        self.set_centering_weights()
         self.score = self.evaluate()
+
+        self.best_districts = self.map['district'].to_numpy()
+        self.best_score = self.score
 
     def evaluate(self, districts: Optional[List[District]] = None) -> float:
         """This function scores a list of districts. It could be a set of actual districts or a hypothetical set when
@@ -314,6 +355,11 @@ class GerrymanderingSimulation:
 
         self.border_gen.update(border_update_dict)
 
+        # check the best score
+        if new_score < self.best_score:
+            self.best_score = new_score
+            self.best_districts = self.map['district'].to_numpy().copy()
+
     def gerrymander(self, num_center_swaps: int, num_explore_swaps: int, num_electioneer_swaps: int) -> None:
         if np.sum(self.desired_results) == 0:
             raise Exception('You need to set the desired results')
@@ -325,6 +371,12 @@ class GerrymanderingSimulation:
             self.swap_pixels(first, second)
             if len(pd.unique(self.map["district"])) != self.num_districts:
                 return
+        with open('wtf.pickle', 'wb') as fp:
+            to_dump = (self.map['district'], self.best_districts)
+            pickle.dump(to_dump, fp)
+        self.rollback()
+        pop = self.map.groupby('district').sum().population
+        print(f'\033[91mRange: {pop.max() - pop.min():_}\nSpread: {pop.std():_}\033[0m')
 
         self.set_exploring_weights()
         for _ in progress(range(num_explore_swaps), desc='Exploring'):
@@ -339,6 +391,10 @@ class GerrymanderingSimulation:
             self.swap_pixels(first, second)
             if len(pd.unique(self.map["district"])) != self.num_districts:
                 return
+
+    def rollback(self) -> None:
+        self.map['district'] = self.best_districts
+        # TODO: make sure to update the borders and other things
 
     def show_districts(self):
         """This function plots a choropleth of the internal GeoDataFrame with the district as the color var."""
@@ -370,6 +426,7 @@ def driver(state: str, num_districts: int, year: int, testing: bool, verbose: bo
         sim.gerrymander(centering, exploring, electioneering)
     except KeyboardInterrupt:
         print(f'There were {len(pd.unique(sim.map["district"]))} districts')
+        sim.rollback()
         sim.show_districts()
 
     sim.map.to_pickle('simulation_out.pickle')
@@ -416,8 +473,14 @@ def main():
         stats.dump_stats(filename='profile.prof')
     else:
         explore, center, electioneer = cmd_args.specify or (120_000, 50_000, 120_000)
-        driver(cmd_args.state, cmd_args.num_districts, cmd_args.year, cmd_args.testing, cmd_args.verbose,
-               cmd_args.logging, cmd_args.log_name, cmd_args.show, explore, center, electioneer)
+        while True:
+            try:
+                driver(cmd_args.state, cmd_args.num_districts, cmd_args.year, cmd_args.testing, cmd_args.verbose,
+                       cmd_args.logging, cmd_args.log_name, cmd_args.show, explore, center, electioneer)
+                break
+            except ZeroDivisionError:
+                print('At least one district had no population. Skipping...')
+                continue
 
 
 if __name__ == '__main__':
